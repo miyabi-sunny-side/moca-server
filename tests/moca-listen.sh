@@ -92,7 +92,7 @@ test_macos_native_wav() {
 MOCK
   cat > "$dir/afplay" <<'MOCK'
 #!/usr/bin/env bash
-cp "$1" "$MOCK_PLAYED_WAV"
+cp "${@: -1}" "$MOCK_PLAYED_WAV"
 MOCK
   chmod +x "$dir/uname" "$dir/afplay"
 
@@ -203,9 +203,104 @@ MOCK
   grep -q 'ffmpeg.*インストール' "$TMP/missing-err" || fail "ffmpegの導入案内がない"
 }
 
+volume_mock_dir() {
+  local dir="$1"
+  make_common_mocks "$dir"
+  cat > "$dir/ffplay" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_PLAYER_ARGS"
+cat > /dev/null
+MOCK
+  cat > "$dir/pw-play" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_PLAYER_ARGS"
+MOCK
+  cat > "$dir/paplay" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_PLAYER_ARGS"
+MOCK
+  cat > "$dir/afplay" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_PLAYER_ARGS"
+MOCK
+  cat > "$dir/aplay" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_PLAYER_ARGS"
+MOCK
+  chmod +x "$dir"/ffplay "$dir"/pw-play "$dir"/paplay "$dir"/afplay "$dir"/aplay
+}
+
+# 1 回だけ起動して player の引数行を 1 行取る。$1=name $2=player、残りは moca-listen の引数。
+# 環境変数は呼び出し側で `MOCA_VOLUME=30 run_player_once ...` のように付ける。
+run_player_once() {
+  local name="$1" player="$2"
+  shift 2
+  local dir="$TMP/volume-$name"
+  volume_mock_dir "$dir"
+  MOCK_STREAM_CALLS="$TMP/$name-stream" MOCK_SAY_ARGS="$TMP/$name-args" \
+    MOCK_SAY_BODIES="$TMP/$name-bodies" MOCK_PLAYER_ARGS="$TMP/$name-player" \
+    MOCA_PLAYER="$player" MOCA_RETRY_DELAY=0 PATH="$dir:/usr/bin:/bin" \
+    "$ROOT/bin/moca-listen" "$@" > /dev/null 2> "$TMP/$name-err" &
+  local pid=$!
+  wait_for_lines "$TMP/$name-player" 1 || { kill "$pid" 2>/dev/null || true; fail "$name: player が呼ばれなかった"; }
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  head -1 "$TMP/$name-player"
+}
+
+test_volume_is_passed_to_players() {
+  local line
+  line=$(run_player_once default ffplay)
+  [[ "$line" == *'-volume 100'* ]] || fail "既定で ffplay に -volume 100 を渡していない: $line"
+  line=$(run_player_once cli ffplay --volume 30)
+  [[ "$line" == *'-volume 30'* ]] || fail "--volume 30 が ffplay に届いていない: $line"
+  line=$(MOCA_VOLUME=30 run_player_once envvar ffplay)
+  [[ "$line" == *'-volume 30'* ]] || fail "MOCA_VOLUME=30 が ffplay に届いていない: $line"
+  line=$(MOCA_VOLUME=50 run_player_once priority ffplay --volume 30)
+  [[ "$line" == *'-volume 30'* ]] || fail "引数が環境変数より優先されていない: $line"
+  line=$(run_player_once leadzero ffplay --volume 030)
+  [[ "$line" == *'-volume 30'* ]] || fail "先頭 0 付き (030) を 10 進として扱っていない: $line"
+  line=$(run_player_once equals ffplay --volume=30)
+  [[ "$line" == *'-volume 30'* ]] || fail "--volume=30 の形が効いていない: $line"
+  line=$(MOCA_VOLUME=05 run_player_once leadzero-pw pw-play)
+  [[ "$line" == *'--volume 0.05'* ]] || fail "MOCA_VOLUME=05 で pw-play に 0.05 を渡していない: $line"
+  line=$(MOCA_VOLUME=30 run_player_once pwplay pw-play)
+  [[ "$line" == *'--volume 0.30'* ]] || fail "pw-play に --volume 0.30 を渡していない: $line"
+  line=$(MOCA_VOLUME=30 run_player_once paplay paplay)
+  [[ "$line" == *'--volume 19660'* ]] || fail "paplay に --volume 19660 を渡していない: $line"
+  line=$(MOCA_VOLUME=30 run_player_once afplay afplay)
+  [[ "$line" == *'-v 0.30'* ]] || fail "afplay に -v 0.30 を渡していない: $line"
+  line=$(MOCA_VOLUME=30 run_player_once aplay aplay)
+  [[ "$line" != *'volume'* ]] || fail "aplay に音量引数を渡してしまった: $line"
+  [ "$(grep -c '音量指定に対応しない' "$TMP/aplay-err")" = 1 ] || fail "aplay の音量非対応 warning が 1 回ではない"
+  ! grep -q '音量指定に対応しない' "$TMP/default-err" || fail "既定 100 で warning を出している"
+}
+
+test_volume_rejects_bad_values() {
+  local dir="$TMP/volume-bad" value
+  volume_mock_dir "$dir"
+  for value in 0 101 abc 1e1 -5 "" 000000000000000000000000030; do
+    if MOCA_PLAYER=ffplay PATH="$dir:/usr/bin:/bin" "$ROOT/bin/moca-listen" --volume "$value" > /dev/null 2> "$TMP/bad-err"; then
+      fail "--volume $value が成功終了した"
+    else
+      [ "$?" = 2 ] || fail "--volume $value の exit code が 2 ではない"
+    fi
+    grep -q -- '--volume' "$TMP/bad-err" || fail "--volume $value で usage が出ていない"
+  done
+  if MOCA_PLAYER=ffplay MOCA_VOLUME=abc PATH="$dir:/usr/bin:/bin" "$ROOT/bin/moca-listen" > /dev/null 2> "$TMP/bad-env-err"; then
+    fail "MOCA_VOLUME=abc が成功終了した"
+  else
+    [ "$?" = 2 ] || fail "MOCA_VOLUME=abc の exit code が 2 ではない"
+  fi
+  PATH="$dir:/usr/bin:/bin" "$ROOT/bin/moca-listen" --help > "$TMP/help-out" 2>&1 || fail "--help が 0 で終わらない"
+  grep -q -- '--volume' "$TMP/help-out" || fail "--help に --volume が無い"
+}
+
 test_ffplay_and_reconnect
 test_macos_native_wav
 test_wsl_soundplayer
 test_automatic_player_selection
 test_missing_player_fails
+test_volume_is_passed_to_players
+test_volume_rejects_bad_values
 echo "moca-listen tests: ok"

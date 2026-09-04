@@ -90,3 +90,25 @@ moca-listen
 切断から再接続までに送られた通知は再生されない。自動選択を上書きする場合は
 `MOCA_PLAYER` に `ffplay`, `afplay`, `pw-play`, `paplay`, `aplay`,
 `windows-soundplayer` のいずれかを指定できる。
+
+### 音量 (`--volume` / `MOCA_VOLUME`)
+
+再生音量は `--volume N` (1〜100、既定 100) で下げられる。同じ意味の環境変数
+`MOCA_VOLUME` もあり、引数が優先する。範囲外や数字でない値は usage を表示して
+exit 2 で終了する。`--help` で usage を表示する。
+
+```sh
+moca-listen --volume 30
+MOCA_VOLUME=30 moca-listen
+```
+
+プレイヤーごとの対応:
+
+| プレイヤー | 対応 | 渡す引数 |
+|---|---|---|
+| `ffplay` | ○ | `-volume N` |
+| `afplay` | ○ | `-v N/100` (0.0〜1.0。線形ではないが N/100 をそのまま渡す) |
+| `pw-play` | ○ | `--volume N/100` (0.0〜1.0) |
+| `paplay` | ○ | `--volume N*65536/100` (0〜65536) |
+| `aplay` | × | 音量の option が無いので warning を 1 回出して 100 で再生する |
+| Windows SoundPlayer | × | API に音量が無いので warning を 1 回出して 100 で再生する |
