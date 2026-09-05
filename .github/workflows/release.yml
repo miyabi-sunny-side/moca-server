@@ -10,44 +10,69 @@ permissions:
   contents: write
 
 jobs:
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Build and package SPA
+        run: |
+          cd client
+          bun install --frozen-lockfile
+          bun run build
+          tar -czf ../client-build.tar.gz build
+
+      - name: Upload workflow artifact
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-build
+          path: client-build.tar.gz
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: client-build.tar.gz
+
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             artifact: moca-server-linux-x86_64
-            binary: target/release/moca-server
+            binary: moca-server
           - os: windows-latest
+            target: x86_64-pc-windows-msvc
             artifact: moca-server-windows-x86_64.exe
-            binary: target/release/moca-server.exe
+            binary: moca-server.exe
           - os: macos-latest # Apple Silicon (aarch64)
+            target: aarch64-apple-darwin
             artifact: moca-server-macos-aarch64
-            binary: target/release/moca-server
+            binary: moca-server
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
-      - name: Build SPA
-        run: cd client && bun install && bun run build
-
       # Opus は純 Rust の ropus に移行済み: C ツールチェーンも libopus も不要
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: ${{ matrix.target }}
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package artifacts
         shell: bash
         run: |
-          cp "${{ matrix.binary }}" "${{ matrix.artifact }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
           if [ "$RUNNER_OS" = "macOS" ]; then
             shasum -a 256 "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
           else
             sha256sum "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
-          fi
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            tar -czf client-build.tar.gz -C client build
           fi
 
       # 手動トリガ (ビルド検証) 用: 成果物をワークフロー artifact として残す
@@ -56,7 +81,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
 
       - name: Upload to release
         if: startsWith(github.ref, 'refs/tags/')
@@ -65,7 +92,6 @@ jobs:
           files: |
             ${{ matrix.artifact }}
             ${{ matrix.artifact }}.sha256
-            ${{ runner.os == 'Linux' && 'client-build.tar.gz' || '' }}
 
   # Docker job は撤去済み: VOICEPEAK がコンテナ内でのみ合成を拒否する
   # (コンテナ検知と思われる) ため、配布はネイティブバイナリのみとする。

@@ -22,10 +22,16 @@ SPA 成果物は実行ディレクトリの `client/build` に展開してから
 git clone https://github.com/miyabisun/moca-server.git
 cd moca-server
 cp .env.example .env        # PORT / DATABASE_PATH / VOICEPEAK などを調整
-(cd client && bun install && bun run build)
-cargo build --release
+(cd client && bun install --frozen-lockfile && bun run build)
+cargo build --release --locked
 ./target/release/moca-server
 ```
+
+リリース CI は Rust / Bun のバージョンと Rust の target を
+[workflow](./.github/workflows/release.yml) で固定する。Rust は `opt-level=3`、
+LTO 無効、`codegen-units=16`、strip 有効でビルド待ち時間を抑える。
+SPA は OS 共通の外部ファイルとして一度だけビルド・梱包し、
+Linux / Windows / macOS の native バイナリとは別に配布する。
 
 ## 使い方
 
