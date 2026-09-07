@@ -4,7 +4,6 @@
 // GPLv2 のため辞書ファイルはリポジトリに同梱せず、起動時にキャッシュへ DL する
 // (失敗しても無効化して起動継続 = グレースフル劣化。パニックしない)。
 
-use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use unicode_normalization::UnicodeNormalization;
@@ -87,11 +86,6 @@ impl FallbackDict {
         }
         run.clear();
     }
-
-    /// script セグメント配列の各 "text" にだけ apply する。emotion/pause 等は保持。
-    pub fn apply_to_segments(&self, segments: &[Value]) -> Vec<Value> {
-        crate::dictionary::map_segment_text(segments, |text| self.apply(text))
-    }
 }
 
 /// キャッシュがあれば読み、無ければ url から DL してキャッシュへ保存し parse する。
@@ -161,7 +155,6 @@ fn decode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn parse_bep_format_normalizes_halfwidth_to_fullwidth() {
@@ -223,15 +216,5 @@ mod tests {
         let dict = FallbackDict::empty();
         assert!(dict.is_empty());
         assert_eq!(dict.apply("comic"), "comic");
-    }
-
-    #[test]
-    fn apply_to_segments_preserves_other_fields() {
-        let dict = FallbackDict::parse("COMIC ｺﾐｯｸ 0\n");
-        let segs = vec![json!({ "text": "comic", "emotion": { "honwaka": 60 }, "pause": 100 })];
-        let out = dict.apply_to_segments(&segs);
-        assert_eq!(out[0]["text"], "コミック");
-        assert_eq!(out[0]["emotion"]["honwaka"], 60);
-        assert_eq!(out[0]["pause"], 100);
     }
 }

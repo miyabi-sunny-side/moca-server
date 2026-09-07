@@ -2,6 +2,7 @@
 // マスターテキスト (lines.text / script JSON) は決して書き換えない — 音だけ差し替える。
 // 置換規則: 表記→読み。最長一致優先で、ASCII の surface は大文字小文字を無視する。
 
+use crate::fallback::FallbackDict;
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 
@@ -88,24 +89,26 @@ pub fn apply_dictionary(text: &str, entries: &[DictEntry]) -> String {
     out
 }
 
-/// script セグメント配列の各要素の "text" に f を適用する。
+/// 各 segment.text に SQLite 辞書 → フォールバック辞書の順で適用する。
 /// text 以外のフィールド (emotion / pause 等) はそのまま保持する。
-pub fn map_segment_text(segments: &[Value], mut f: impl FnMut(&str) -> String) -> Vec<Value> {
+pub fn apply_dictionary_to_segments(
+    segments: &[Value],
+    entries: &[DictEntry],
+    fallback: &FallbackDict,
+) -> Vec<Value> {
     segments
         .iter()
         .map(|seg| {
             let mut obj: Map<String, Value> = seg.as_object().cloned().unwrap_or_default();
             if let Some(text) = obj.get("text").and_then(Value::as_str) {
-                obj.insert("text".into(), Value::from(f(text)));
+                obj.insert(
+                    "text".into(),
+                    Value::from(fallback.apply(&apply_dictionary(text, entries))),
+                );
             }
             Value::Object(obj)
         })
         .collect()
-}
-
-/// script セグメント配列の各要素の "text" に辞書を適用する。
-pub fn apply_dictionary_to_segments(segments: &[Value], entries: &[DictEntry]) -> Vec<Value> {
-    map_segment_text(segments, |text| apply_dictionary(text, entries))
 }
 
 #[cfg(test)]
@@ -119,6 +122,28 @@ mod tests {
             surface: surface.into(),
             reading: reading.into(),
         }
+    }
+
+    #[test]
+    fn segment_dictionaries_preserve_order_fields_and_source() {
+        use crate::fallback::FallbackDict;
+        use serde_json::json;
+
+        let fallback = FallbackDict::parse("COMIC ｺﾐｯｸ 0\nGAME ｹﾞｰﾑ 0\n");
+        let entries = [entry("comic", "まんが"), entry("GPU", "game")];
+        let source = json!([
+            {"text": "Comic GPU GAME games", "emotion": {"honwaka": 60},
+             "pause": 100, "speed": 90, "pitch": -10, "extra": [1, 2]},
+            {"text": 42}, {"pause": 50}, null
+        ]);
+        let original = source.clone();
+        let mut expected = source.clone();
+        expected[0]["text"] = json!("まんが ゲーム ゲーム games");
+        expected[3] = json!({});
+        let segments = source.as_array().unwrap();
+        let out = apply_dictionary_to_segments(segments, &entries, &fallback);
+        assert_eq!(Value::Array(out), expected);
+        assert_eq!(source, original);
     }
 
     #[test]

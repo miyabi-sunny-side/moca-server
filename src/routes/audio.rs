@@ -74,8 +74,7 @@ fn stored_script_segments(
     let arr = parsed
         .as_array()
         .ok_or_else(|| AppError::Internal("stored script is not an array".into()))?;
-    let segs = apply_dictionary_to_segments(arr, entries);
-    Ok(fallback.apply_to_segments(&segs))
+    Ok(apply_dictionary_to_segments(arr, entries, fallback))
 }
 
 #[cfg(test)]

@@ -72,8 +72,11 @@ fn build_script_segments(state: &AppState, body: &Bytes) -> Result<Vec<Value>, A
     let entries = load_entries(state)?;
     let array = script.as_array().expect("validate_script returns an array");
     // SQLite 辞書を先に消費し、その後段でフォールバック辞書を重ねる。
-    let segs = apply_dictionary_to_segments(array, &entries);
-    Ok(state.fallback.apply_to_segments(&segs))
+    Ok(apply_dictionary_to_segments(
+        array,
+        &entries,
+        &state.fallback,
+    ))
 }
 
 // text/plain 経路: 文分割してから 1 セグメント列にする。?raw=1 は辞書スキップ。
