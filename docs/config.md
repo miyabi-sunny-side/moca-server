@@ -1,25 +1,12 @@
 # 設定 (環境変数)
 
-サーバー側は `.env`（`.env.example` からコピー）または直接 export で設定する。`moca-server` は起動時に `.env` を自動で読み込む。
+環境変数の名称・必須条件・既定値・不正値の扱いは
+[README の環境変数一覧](../README.md#環境変数)を参照。
+このページでは backend と外部 asset の設定方法を説明する。
 
-| 変数 | デフォルト | 説明 |
-|---|---|---|
-| `PORT` | `3000` | サーバーの待受ポート |
-| `DATABASE_PATH` | `./moca.db` | SQLite ファイルの場所。絶対パス推奨。相対パスは起動ディレクトリ基準 |
-| `VOICEPEAK` | `voicepeak` | voicepeak バイナリの**絶対パス** (サーバーがセグメントごとに直接起動する)。VOICEPEAK は単一バイナリではなく `dic/` `fonts/` `settings/` 等の兄弟ディレクトリを起動時に参照するため、インストール先 (例: `~/tools/Voicepeak/voicepeak`) をそのまま指定する。PATH に通したいなら `~/.local/bin/voicepeak` にラッパースクリプトを置いて `exec $HOME/tools/Voicepeak/voicepeak "$@"` させる方式が確実 |
-| `MOCA_NARRATOR` | `Miyamai Moca` | ナレーター名 (`-n` として voicepeak に渡す)。VOICEPEAK にインストール済みの音源名を指定 |
-| `MOCA_URL` | `http://localhost:3000` | サーバーの URL (クライアント `bin/moca` が参照) |
-| `ANALYZE_BACKEND` | `none` | 感情分析の実行方式。`none` (無効) / `cli` (任意の LLM CLI) / `openai` (OpenAI 互換 API) |
-| `ANALYZE_CMD` | `claude -p --model haiku` | `ANALYZE_BACKEND=cli` の時に起動するコマンド。stdin にプロンプトが流れ、stdout に台本 JSON 配列を返せば良い |
-| `OPENAI_API_BASE` | — | `ANALYZE_BACKEND=openai` の時のエンドポイント (末尾の `/chat/completions` は自動付与)。OpenAI 本家 / Gemini 互換 / Groq / LM Studio / Ollama `/v1` / vLLM / LocalAI などが刺さる |
-| `OPENAI_API_KEY` | — | 同上。ローカル LLM で不要ならダミー値でよい |
-| `OPENAI_MODEL` | — | 同上。渡すモデル ID |
-| `BEP_DICT_PATH` | `./bep-eng.dic` | 英単語→カタカナのフォールバック辞書のキャッシュ場所 |
-| `BEP_DICT_URL` | (alkana 派生 CSV) | フォールバック辞書の取得元。キャッシュが無ければ起動時に一度だけダウンロードし、失敗したらフォールバック無効のまま起動を続行する |
-| `MOCA_ASSETS_DIR` | `./moca-assets` | 作業タブの立ち絵素材ディレクトリ。`/moca-assets` として配信される。無ければ起動時に自動 DL される (下記「作業タブの立ち絵素材」参照) |
-| `MOCA_ILLUST_URL` | (公式 moca_illust.zip) | 立ち絵 zip の取得元。空文字で自動 DL を無効化 (手動配置した素材だけを使う) |
-| `WORK_NEWS_CMD` | — | 作業タブの時事ネタ声かけ専用 CLI (例: `claude -p --allowed-tools WebSearch`)。未設定なら `ANALYZE_BACKEND` の backend にフォールバック (その backend が検索できなければ記憶ベースの小ネタになる) |
-| `WORK_TALK_TIMEOUT_SECS` | `60` | `/work/talk` のサーバ側タイムアウト秒。CLI プロセスは kill される (クライアントは 20 秒で固定セリフに切替済み) |
+`VOICEPEAK` はインストール先の絶対パスを推奨する。VOICEPEAK は `dic/`、`fonts/`、
+`settings/` などの兄弟ディレクトリも参照するため、バイナリだけを移動せず配置を保つ。
+`PATH` に通す場合はラッパーからインストール先を `exec` する方法も使える。
 
 ## 感情分析 backend の切替
 

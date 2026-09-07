@@ -23,8 +23,13 @@ WantedBy=default.target
 
 - バイナリは `~/.local/bin/moca-server`、SPA 成果物 (`client-build.tar.gz` を展開した
   `client/build`) は `WorkingDirectory` 配下に置く
-- `.env` (EnvironmentFile) に PORT / DATABASE_PATH / VOICEPEAK 等を書く ([config.md](./config.md))
+- `.env` (EnvironmentFile) に PORT / DATABASE_PATH / VOICEPEAK 等を書く ([環境変数一覧](../README.md#環境変数))
 - `systemctl --user enable --now moca-server` で常駐開始
+
+home-server 配布を利用する場合の unit・設定保存先は
+[home-server の systemd 手順](https://github.com/miyabisun/home-server/blob/main/systemd/README.md)
+が所有する。既存の待受ポートを維持する場合はサービス専用の
+`~/.config/moca-server/.env` に `PORT` を明示する。アプリと updater の未設定時は `3000`。
 
 ## 自動更新
 
