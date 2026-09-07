@@ -70,7 +70,7 @@ Linux / Windows / macOS の native バイナリとは別に配布する。
 | `MOCA_RETRY_DELAY` | `2` | `moca-listen` の再接続待機秒。事前検証せず `sleep` に渡すため、不正値では待機に失敗 |
 | `MOCA_PLAYER` | 利用可能なプレイヤーを自動選択 | `moca-listen` の再生方法。未知値・指定プレイヤー未導入なら exit 1。選択肢は [CLI ドキュメント](./docs/cli.md) |
 | `MOCA_VOLUME` | `100` | `moca-listen` の音量（1〜100 の整数、`--volume` 優先）。範囲外・非数値は exit 2 |
-| `TMPDIR` | `/tmp` | `moca-listen` の WAV 一時ファイルを置く OS 用ディレクトリ。作成不能ならその再生に失敗 |
+| `TMPDIR` | `/tmp` | `moca-listen` の WAV と ffplay 診断の一時ファイルを置く OS 用ディレクトリ。作成不能ならその再生に失敗 |
 
 コマンド名で指定した VOICEPEAK、LLM CLI、クライアントのプレイヤーなどは OS の
 `PATH` から探索する。CLI 自身の認証・音声デバイスの設定は各ツールの実行環境が所有する。
@@ -105,6 +105,8 @@ set-hook -g alert-bell 'run-shell "moca-notify \"#{session_name} が待ってま
 
 ブラウザを開かず常駐購読する場合は `moca-listen` を使う。切断時は自動再接続し、
 `ffplay` があれば Ogg/Opus、なければ macOS / Linux / WSL の標準系プレイヤーで WAV を再生する。
+接続成立・通知受信・再生完了を日時付きで表示する。リリースには listener 本体と checksum も含む。
+取得と検証の手順は [CLI ドキュメント](./docs/cli.md#通知の常駐購読-binmoca-listen) を参照。
 
 ## ドキュメント
 

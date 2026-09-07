@@ -28,7 +28,7 @@ set -euo pipefail
 args="$*"
 if [[ "$args" == *'/notify/stream'* ]]; then
   echo stream >> "$MOCK_STREAM_CALLS"
-  printf 'data: build\ndata: finished\n\n'
+  printf 'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: build\ndata: finished\n\n'
   exit 22
 fi
 body=$(cat)

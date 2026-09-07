@@ -10,6 +10,35 @@ permissions:
   contents: write
 
 jobs:
+  listener:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify listener
+        run: |
+          bash -n bin/moca-listen
+          bash tests/moca-listen.sh
+          python3 tests/moca-listen-output.py
+      - name: Package listener
+        run: |
+          cp bin/moca-listen moca-listen
+          sha256sum moca-listen > moca-listen.sha256
+      - name: Upload workflow artifact
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: moca-listen
+          path: |
+            moca-listen
+            moca-listen.sha256
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            moca-listen
+            moca-listen.sha256
+
   client:
     runs-on: ubuntu-latest
     steps:

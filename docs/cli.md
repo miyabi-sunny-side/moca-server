@@ -72,11 +72,27 @@ dotfiles 側の hook 実装本体は moca-server のスコープ外 (サーバ�
 ブラウザのバックグラウンドタブ制限を受けず、切断時は自動的に再接続する。
 
 ```sh
-curl -o ~/bin/moca-listen https://raw.githubusercontent.com/miyabisun/moca-server/main/bin/moca-listen
+# 最新リリースの Assets から moca-listen と moca-listen.sha256 を同じ場所へ取得する
+# https://github.com/miyabi-sunny-side/moca-server/releases/latest
+sha256sum -c moca-listen.sha256   # macOS: shasum -a 256 -c moca-listen.sha256
+mkdir -p ~/bin
+cp moca-listen ~/bin/moca-listen
 chmod +x ~/bin/moca-listen
 export MOCA_URL=http://<server-host>:3000
 moca-listen
 ```
+
+リリースごとに listener 本体と checksum を配布する。ダウンロードしたファイルには
+実行権限の付与が必要。ソース checkout では `bin/moca-listen` を直接使える。
+
+接続先が SSE の成功応答を返すと、通知の到着前でも「接続しました」を標準出力へ
+1 回表示する。切断・失敗後の接続成立は「再接続しました」で分かる。
+通知ごとに「通知を受信しました」、プレイヤーが正常終了すると「通知を再生しました」を
+表示し、再生失敗と接続エラーは標準エラーへ出す。通知本文は表示しない。
+listener 自身の状態行には `[2026-09-07 01:23:45+0900]` のようにローカル日時を付ける。
+これは listener が観測した日時であり、通知が生成された日時ではない。
+keepalive は表示せず、ffplay の進捗表示も抑える。外部コマンドのエラー本文は保持する。
+ffplay の error レベル診断は終了時に表示し、終了コードが 0 でも再生失敗として扱う。
 
 再生方法は起動時に自動選択する。`ffplay` があれば Ogg/Opus をストリーミング再生し、
 なければ WAV と次のOS標準系プレイヤーを使う。

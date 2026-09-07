@@ -1,6 +1,11 @@
 # テスト
 
 - サーバー側 (Rust): `cargo test` で各モジュールのユニットテストが走る。
+- 通知 listener: `bash tests/moca-listen.sh` で音量・プレイヤー選択・WAV 補正を検証する。
+  `python3 tests/moca-listen-output.py` は一時 localhost SSE サーバーと実 curl、player stub を使う。
+  通知なしの接続成立、再接続、日時と出力先、keepalive、再生順序・成功・失敗、シグナル終了を確認する。
+  配布物は `python3 tests/moca-listen-output.py /path/to/moca-listen` で同じ検証を行える。
+  Python は検証だけに使用し、listener の実行には不要。実機の音声出力はこの検証に含まない。
 - クライアント側 (Svelte SPA): E2E テスト (Playwright + Chromium) を整備済み。
   `client/` で `bun run test` を実行すると、`vite build && vite preview` を自動起動し
   (バックエンド・VOICEPEAK は不要。全 API は `page.route` でモックする) 全テストが走る。
