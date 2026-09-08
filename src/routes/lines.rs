@@ -226,12 +226,12 @@ async fn reorder(State(state): State<AppState>, Path(id): Path<String>, body: By
         }
     }
 
-    let existing_set: std::collections::HashSet<i64> = {
+    let mut existing_set: std::collections::HashSet<i64> = {
         let mut stmt = conn.prepare("SELECT id FROM lines WHERE project_id = ?1")?;
         let rows = stmt.query_map([project_id], |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
-    if order.len() != existing_set.len() || order.iter().any(|oid| !existing_set.contains(oid)) {
+    if order.len() != existing_set.len() || order.iter().any(|oid| !existing_set.remove(oid)) {
         return Err(AppError::BadRequest(
             "order must contain exactly the ids of this project".into(),
         ));

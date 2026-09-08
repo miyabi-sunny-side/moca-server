@@ -395,6 +395,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn line_reorder_requires_each_id_once() {
+        let app = app();
+        let p = create_project(&app, "テスト").await;
+        let id = p["id"].as_i64().unwrap();
+        let (_, a) = add_line(&app, id, json!({ "text": "A" })).await;
+        let (_, b) = add_line(&app, id, json!({ "text": "B" })).await;
+        let project_uri = format!("/api/projects/{id}");
+        let order_uri = format!("{project_uri}/lines/order");
+        let (_, original) = req(&app, Method::GET, &project_uri, None).await;
+
+        for order in [
+            json!([a["id"], a["id"]]),
+            json!([a["id"], format!(" {}.0 ", a["id"])]),
+            json!([a["id"]]),
+            json!([a["id"], 99999]),
+        ] {
+            let (status, error) = req(
+                &app,
+                Method::PUT,
+                &order_uri,
+                Some(json!({ "order": order })),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "order: {order}, body: {error}"
+            );
+            assert_eq!(
+                error,
+                json!({ "error": "order must contain exactly the ids of this project" })
+            );
+            let (status, unchanged) = req(&app, Method::GET, &project_uri, None).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(unchanged, original, "order: {order}");
+        }
+
+        for (order, mut expected) in [
+            (json!([b["id"], a["id"]]), json!([b, a])),
+            (
+                json!([format!(" {}.0 ", a["id"]), b["id"].to_string()]),
+                json!([a, b]),
+            ),
+        ] {
+            let (status, reordered) = req(
+                &app,
+                Method::PUT,
+                &order_uri,
+                Some(json!({ "order": order })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            expected[0]["position"] = json!(0);
+            expected[1]["position"] = json!(1);
+            assert_eq!(reordered, expected);
+            let (status, saved) = req(&app, Method::GET, &project_uri, None).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(saved["lines"], expected);
+        }
+    }
+
+    #[tokio::test]
     async fn line_reorder_foreign_id_400() {
         let app = app();
         let p = create_project(&app, "テスト").await;
