@@ -12,6 +12,7 @@ mod serialize;
 mod spa;
 mod state;
 mod synth;
+mod voicepeak;
 mod wav;
 
 use config::Config;

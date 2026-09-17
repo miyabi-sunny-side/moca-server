@@ -1,6 +1,16 @@
 # テスト
 
 - サーバー側 (Rust): `cargo test` で各モジュールのユニットテストが走る。
+  Linux の常駐プロセス制御テストは Python 3 の隔離された子プロセスを使う。
+  同一 PID の再利用、出力破損、異常終了、キャンセル、通常 CLI への復帰を検証する。
+- 常駐制御の入力プロトコル (Linux) は以下のコマンドで検証する。
+  UTF-8・改行・空白を含む引数、途中 EOF、不正な個数・長さ・NUL を検証する。
+  VOICEPEAK 本体を使った実機確認は [常駐制御](./voicepeak-resident.md) を参照。
+
+  ```sh
+  c++ -std=c++17 -DMOCA_RESIDENT_TEST native/voicepeak_resident.cpp -o /tmp/moca-resident-test
+  /tmp/moca-resident-test
+  ```
 - 通知 listener: `bash tests/moca-listen.sh` で音量・プレイヤー選択・WAV 補正を検証する。
   `python3 tests/moca-listen-output.py` は一時 localhost SSE サーバーと実 curl、player stub を使う。
   通知なしの接続成立、再接続、日時と出力先、keepalive、再生順序・成功・失敗、シグナル終了を確認する。

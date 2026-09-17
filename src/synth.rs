@@ -1,11 +1,10 @@
-// 音声合成パイプ: 合成の直列化 (SynthQueue) + voicepeak 起動 + セグメント合成。
-// テキストの文分割・台本セグメントごとの voicepeak 起動をサーバー内で完結させる。
+// 音声合成パイプ: 文分割・直列化・常駐 VOICEPEAK の再利用と配信。
 
 use crate::opus::OpusStream;
-use crate::wav::{extract_pcm, wav_header, MOCA_FORMAT};
+use crate::voicepeak::Voicepeak;
+use crate::wav::{wav_header, MOCA_FORMAT};
 use axum::body::Bytes;
 use serde_json::Value;
-use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
@@ -23,20 +22,20 @@ const MAX_ATTEMPTS: usize = 3;
 /// 失敗しリトライでは回避できないため、合成は必ず直列化する。
 /// tokio の Mutex は FIFO 公平なので追加のキュー実装は不要。
 pub struct SynthQueue {
-    lock: Mutex<()>,
+    lock: Mutex<Voicepeak>,
     depth: AtomicUsize,
 }
 
 impl SynthQueue {
     pub fn new() -> Self {
         Self {
-            lock: Mutex::new(()),
+            lock: Mutex::new(Voicepeak::default()),
             depth: AtomicUsize::new(0),
         }
     }
 
     /// 待ち行列に加わり、ロックを取得したら SynthGuard を返す。
-    /// Guard が drop されるまで (= 全 voicepeak プロセス完了まで) ロックを保持する。
+    /// Guard が drop されるまでロックを保持する。常駐プロセスは次の要求へ引き継ぐ。
     pub async fn enter(&self) -> SynthGuard<'_> {
         let waiting = self.depth.fetch_add(1, Ordering::SeqCst) + 1;
         tracing::debug!("synth queue depth: {waiting}");
@@ -50,7 +49,7 @@ impl SynthQueue {
 
 /// SynthQueue のロック保持証。Drop でロック解放と depth の減算を一元化する。
 pub struct SynthGuard<'a> {
-    _permit: MutexGuard<'a, ()>,
+    _permit: MutexGuard<'a, Voicepeak>,
     depth: &'a AtomicUsize,
 }
 
@@ -103,7 +102,11 @@ pub fn silence_pcm(pause_ms: usize) -> Vec<u8> {
 }
 
 /// 1 セグメントを voicepeak で合成し PCM (s16le/48k/mono) を返す。最大 3 回リトライ。
-async fn synthesize_segment(cfg: &SynthConfig, seg: &Value) -> Result<Vec<u8>, String> {
+async fn synthesize_segment(
+    engine: &mut Voicepeak,
+    cfg: &SynthConfig,
+    seg: &Value,
+) -> Result<Vec<u8>, String> {
     let text = seg.get("text").and_then(Value::as_str).unwrap_or("");
 
     // emotion: {k1:v1,k2:v2} → "k1=v1,k2=v2" (serde_json の Map はキー昇順で安定)。
@@ -122,7 +125,7 @@ async fn synthesize_segment(cfg: &SynthConfig, seg: &Value) -> Result<Vec<u8>, S
 
     let mut last_err = String::new();
     for attempt in 1..=MAX_ATTEMPTS {
-        match run_voicepeak(cfg, text, emotion.as_deref(), speed, pitch).await {
+        match run_voicepeak(engine, cfg, text, emotion.as_deref(), speed, pitch).await {
             Ok(pcm) => return Ok(pcm),
             Err(e) => {
                 tracing::warn!("voicepeak failed (attempt {attempt}) for {text:?}: {e}");
@@ -133,8 +136,9 @@ async fn synthesize_segment(cfg: &SynthConfig, seg: &Value) -> Result<Vec<u8>, S
     Err(format!("voicepeak gave up on {text:?}: {last_err}"))
 }
 
-/// voicepeak を 1 回起動し、tempfile 経由で出力 WAV を読んで PCM を取り出す。
+/// 1 件の生成を依頼し、tempfile 経由で出力 WAV を読んで PCM を取り出す。
 async fn run_voicepeak(
+    engine: &mut Voicepeak,
     cfg: &SynthConfig,
     text: &str,
     emotion: Option<&str>,
@@ -146,36 +150,27 @@ async fn run_voicepeak(
     let tmp = tempfile::NamedTempFile::new().map_err(|e| format!("tempfile: {e}"))?;
     let out_path = tmp.path();
 
-    let mut cmd = tokio::process::Command::new(&cfg.voicepeak_path);
-    cmd.arg("-s")
-        .arg(text)
-        .arg("-n")
-        .arg(&cfg.narrator)
-        .arg("-o")
-        .arg(out_path);
+    let mut args = vec![
+        "voicepeak".into(),
+        "-s".into(),
+        text.into(),
+        "-n".into(),
+        cfg.narrator.clone(),
+        "-o".into(),
+        out_path.to_str().ok_or("output path is not UTF-8")?.into(),
+    ];
     if let Some(e) = emotion {
-        cmd.arg("-e").arg(e);
+        args.extend(["-e".into(), e.into()]);
     }
     if let Some(s) = speed {
-        cmd.arg("--speed").arg(s.to_string());
+        args.extend(["--speed".into(), s.to_string()]);
     }
     if let Some(p) = pitch {
-        cmd.arg("--pitch").arg(p.to_string());
+        args.extend(["--pitch".into(), p.to_string()]);
     }
-    // クライアント切断で合成タスク (と child) が drop されたら voicepeak も止める。
-    cmd.kill_on_drop(true);
-    // voicepeak はデバッグログを出すだけなので PCM とは無関係。stdout は捨て、stderr はログへ。
-    cmd.stdout(Stdio::null()).stderr(Stdio::inherit());
-
-    let status = cmd.status().await.map_err(|e| format!("spawn: {e}"))?;
-    if !status.success() {
-        return Err(format!("exited with {status}"));
-    }
-
-    let bytes = tokio::fs::read(out_path)
+    engine
+        .synthesize(&cfg.voicepeak_path, &args, out_path)
         .await
-        .map_err(|e| format!("read output: {e}"))?;
-    extract_pcm(&bytes)
 }
 
 /// 配信フォーマット。既定は Opus (帯域 1/12)、Accept: audio/wav で Wav (動画素材用の可逆)。
@@ -187,7 +182,7 @@ pub enum OutputFormat {
 
 /// セグメント列を順に合成し、フォーマットに応じた音声フレームを mpsc へ送る。
 /// タスク先頭で synth.enter() してサーバー全体の合成を直列化する
-/// (ロックは全 voicepeak プロセス完了 = 本関数の終了まで保持)。
+/// (ロックは本関数の終了まで保持)。
 pub async fn stream_synthesis(
     synth: Arc<SynthQueue>,
     cfg: SynthConfig,
@@ -195,15 +190,16 @@ pub async fn stream_synthesis(
     format: OutputFormat,
     tx: Sender<Result<Bytes, std::io::Error>>,
 ) {
-    let _guard = synth.enter().await;
+    let mut guard = synth.enter().await;
     match format {
-        OutputFormat::Wav => stream_wav(&cfg, &segments, &tx).await,
-        OutputFormat::Opus => stream_opus(&cfg, &segments, &tx).await,
+        OutputFormat::Wav => stream_wav(&mut guard._permit, &cfg, &segments, &tx).await,
+        OutputFormat::Opus => stream_opus(&mut guard._permit, &cfg, &segments, &tx).await,
     }
 }
 
 /// WAV 経路 (動画素材用の可逆出力): ヘッダ + 各 PCM + pause 無音をそのまま送る。
 async fn stream_wav(
+    engine: &mut Voicepeak,
     cfg: &SynthConfig,
     segments: &[Value],
     tx: &Sender<Result<Bytes, std::io::Error>>,
@@ -218,7 +214,7 @@ async fn stream_wav(
     }
 
     for seg in segments {
-        let pcm = match synth_or_abort(cfg, seg, tx).await {
+        let pcm = match synth_or_abort(engine, cfg, seg, tx).await {
             Some(p) => p,
             None => return,
         };
@@ -236,6 +232,7 @@ async fn stream_wav(
 /// Opus 経路: PCM を Ogg/Opus へ逐次エンコードし、セグメント完了ごとに
 /// 出来上がった Ogg ページをチャンク送信する (セグメント間ストリーミング維持)。
 async fn stream_opus(
+    engine: &mut Voicepeak,
     cfg: &SynthConfig,
     segments: &[Value],
     tx: &Sender<Result<Bytes, std::io::Error>>,
@@ -256,7 +253,7 @@ async fn stream_opus(
     }
 
     for seg in segments {
-        let pcm = match synth_or_abort(cfg, seg, tx).await {
+        let pcm = match synth_or_abort(engine, cfg, seg, tx).await {
             Some(p) => p,
             None => return,
         };
@@ -294,12 +291,13 @@ async fn stream_opus(
 
 /// 1 セグメントを合成する。切断なら None を返し (タスク終了)、合成失敗ならエラーフレームを送って None。
 async fn synth_or_abort(
+    engine: &mut Voicepeak,
     cfg: &SynthConfig,
     seg: &Value,
     tx: &Sender<Result<Bytes, std::io::Error>>,
 ) -> Option<Vec<u8>> {
     tokio::select! {
-        r = synthesize_segment(cfg, seg) => match r {
+        r = synthesize_segment(engine, cfg, seg) => match r {
             Ok(p) => Some(p),
             Err(e) => {
                 // 3 リトライ後も失敗。ヘッダ送信済みでステータス変更不可なので

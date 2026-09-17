@@ -15,7 +15,8 @@ LLM による感情パラメータの自動生成に対応。文単位で逐次�
 から `moca-server` バイナリと SPA 成果物 `client-build.tar.gz` を取得 (`.sha256` で整合性確認)。
 SPA 成果物は実行ディレクトリの `client/build` に展開してから起動する。
 
-**ソースからビルド** — Rust toolchain と [Bun](https://bun.sh) だけで足りる
+**ソースからビルド** — Rust toolchain と [Bun](https://bun.sh) を使用する。
+Linux x86_64 では常駐制御ライブラリのビルドに C++17 コンパイラ (`c++`、`CXX` で変更可) も必要。
 (Opus は純 Rust 実装の [ropus](https://crates.io/crates/ropus) を使うため C ライブラリ不要):
 
 ```sh
@@ -45,6 +46,7 @@ Linux / Windows / macOS の native バイナリとは別に配布する。
 | `DATABASE_PATH` | 任意 | `./moca.db` | SQLite ファイル。設定文字列をそのまま渡し、DB を開けなければ起動失敗 |
 | `VOICEPEAK` | 任意 | `voicepeak` | 音声合成 CLI のパスまたはコマンド名。空・実行不能なら合成時に失敗。インストール先の絶対パス推奨 ([詳細](./docs/config.md)) |
 | `MOCA_NARRATOR` | 任意 | `Miyamai Moca` | VOICEPEAK に渡す音源名。事前検証せず、空・未導入の音源などは合成時に判定 |
+| `MOCA_VOICEPEAK_RESIDENT` | 任意 | 自動 | 対応する Linux x86_64 版では同一プロセスを再利用。`0` で従来の都度起動へ戻す ([対応版・動作](./docs/voicepeak-resident.md)) |
 | `ANALYZE_BACKEND` | 任意 | `none` | `none` / `cli` / `openai`。空・未知値は起動失敗。`none` では感情分析無効 |
 | `ANALYZE_CMD` | 任意（`cli` 時に使用） | `claude -p --model haiku` | `sh -c` で実行する LLM コマンド。前後空白を除いた空値は起動失敗。実行失敗は分析時のエラー |
 | `OPENAI_API_BASE` | `openai` 時必須 | なし | OpenAI 互換 API ベース URL。末尾の `/chat/completions` を自動付与。未設定・空は起動失敗、不正 URL は分析時に失敗 |
