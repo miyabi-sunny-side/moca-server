@@ -1,7 +1,9 @@
 # テスト
 
 - サーバー側 (Rust): `cargo test` で各モジュールのユニットテストが走る。
-  Linux の常駐プロセス制御テストは Python 3 の隔離された子プロセスを使う。
+  Linux の常駐プロセス制御テストは Rust の隔離された子プロセスを使う。
+  通常の `cargo test` が `voicepeak-test-process` example もビルドする。
+  単一 target のみを新規ビルドする場合は、先に `cargo build --example voicepeak-test-process` を実行する。
   同一 PID の再利用、出力破損、異常終了、キャンセル、通常 CLI への復帰を検証する。
 - 常駐制御の入力プロトコル (Linux) は以下のコマンドで検証する。
   UTF-8・改行・空白を含む引数、途中 EOF、不正な個数・長さ・NUL を検証する。
@@ -12,10 +14,16 @@
   /tmp/moca-resident-test
   ```
 - 通知 listener: `bash tests/moca-listen.sh` で音量・プレイヤー選択・WAV 補正を検証する。
-  `python3 tests/moca-listen-output.py` は一時 localhost SSE サーバーと実 curl、player stub を使う。
-  通知なしの接続成立、再接続、日時と出力先、keepalive、再生順序・成功・失敗、シグナル終了を確認する。
-  配布物は `python3 tests/moca-listen-output.py /path/to/moca-listen` で同じ検証を行える。
-  Python は検証だけに使用し、listener の実行には不要。実機の音声出力はこの検証に含まない。
+  `cargo test --locked` は、実 curl と一時 localhost SSE サーバーを使う出力検証も実行する。
+  通知なしの接続、再接続、日時と出力先、keepalive、再生順序・成功・失敗、シグナル終了を確認する。
+  player は shell stub で置き換えるため、実機の音声出力はこの検証に含まない。
+  出力検証だけを実行する場合は `cargo test --locked --test moca_listen_output` を使う。
+  配布物も同じテストで検証できる。対象 path を次のように指定する。
+
+  ```sh
+  MOCA_LISTENER_UNDER_TEST=/path/to/moca-listen cargo test --locked --test moca_listen_output
+  ```
+
 - クライアント側 (Svelte SPA): E2E テスト (Playwright + Chromium) を整備済み。
   `client/` で `bun run test` を実行すると、`vite build && vite preview` を自動起動し
   (バックエンド・VOICEPEAK は不要。全 API は `page.route` でモックする) 全テストが走る。

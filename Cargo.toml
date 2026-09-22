@@ -3,6 +3,10 @@ name = "moca-server"
 version = "0.8.9"
 edition = "2021"
 
+[[example]]
+name = "voicepeak-test-process"
+path = "tests/support/voicepeak_process.rs"
+
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }

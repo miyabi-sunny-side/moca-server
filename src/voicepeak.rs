@@ -274,26 +274,14 @@ mod resident {
         }
 
         async fn fake_process() -> Process {
-            let script = r#"
-import os, struct, sys, time, wave
-src, dst = sys.stdin.buffer, sys.stdout.buffer
-dst.write(b'R'); dst.flush()
-while True:
-    count = src.read(4)
-    if not count: break
-    args = [src.read(struct.unpack('<I', src.read(4))[0]).decode() for _ in range(struct.unpack('<I', count)[0])]
-    text, out = args[args.index('-s') + 1], args[args.index('-o') + 1]
-    if text == 'stall': time.sleep(30)
-    if text == 'crash': os._exit(3)
-    if text == 'bad': open(out, 'wb').write(b'incomplete')
-    else:
-        with wave.open(out, 'wb') as wav:
-            wav.setparams((1, 2, 48000, 0, 'NONE', 'none'))
-            wav.writeframes(text.encode()[:1] * 4)
-    dst.write(b'D'); dst.flush()
-"#;
-            let mut child = tokio::process::Command::new("python3")
-                .args(["-u", "-c", script])
+            let binary = std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("examples/voicepeak-test-process");
+            let mut child = tokio::process::Command::new(binary)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .kill_on_drop(true)

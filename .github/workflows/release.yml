@@ -14,11 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
       - name: Verify listener
         run: |
           bash -n bin/moca-listen
           bash tests/moca-listen.sh
-          python3 tests/moca-listen-output.py
+          cargo test --locked --test moca_listen_output
       - name: Package listener
         run: |
           cp bin/moca-listen moca-listen
