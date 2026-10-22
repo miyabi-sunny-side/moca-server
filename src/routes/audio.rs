@@ -63,7 +63,7 @@ async fn audio_wav(
 }
 
 /// 保存済み script 文字列 (保存時に検証済み) を parse し、各 segment.text に
-/// SQLite 辞書 → フォールバック辞書の順で適用する。
+/// `SQLite` 辞書 → フォールバック辞書の順で適用する。
 fn stored_script_segments(
     script: &str,
     entries: &[DictEntry],

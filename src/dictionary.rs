@@ -89,7 +89,7 @@ pub fn apply_dictionary(text: &str, entries: &[DictEntry]) -> String {
     out
 }
 
-/// 各 segment.text に SQLite 辞書 → フォールバック辞書の順で適用する。
+/// 各 segment.text に `SQLite` 辞書 → フォールバック辞書の順で適用する。
 /// text 以外のフィールド (emotion / pause 等) はそのまま保持する。
 pub fn apply_dictionary_to_segments(
     segments: &[Value],

@@ -16,7 +16,7 @@ impl Voicepeak {
         args: &[String],
         output: &Path,
     ) -> Result<Vec<u8>, String> {
-        tokio::time::timeout(Duration::from_secs(60), self.run(executable, args, output))
+        tokio::time::timeout(Duration::from_mins(1), self.run(executable, args, output))
             .await
             .map_err(|_| "voicepeak timed out after 60 seconds".to_string())?
     }
