@@ -6,22 +6,22 @@ pub struct Config {
     pub db_path: String,
     /// voicepeak CLI の実行パス (env: VOICEPEAK)。合成時に直接起動する。
     pub voicepeak_path: String,
-    /// 合成に使うナレーター名 (env: MOCA_NARRATOR)。
+    /// 合成に使うナレーター名 (env: `MOCA_NARRATOR`)。
     pub narrator: String,
-    /// フォールバック辞書 (bep-eng.dic 由来) のローカルキャッシュパス (env: BEP_DICT_PATH)。
+    /// フォールバック辞書 (bep-eng.dic 由来) のローカルキャッシュパス (env: `BEP_DICT_PATH`)。
     pub bep_dict_path: String,
-    /// フォールバック辞書の DL 元 URL (env: BEP_DICT_URL)。ops が差し替え可能。
+    /// フォールバック辞書の DL 元 URL (env: `BEP_DICT_URL`)。ops が差し替え可能。
     pub bep_dict_url: String,
-    /// 作業タブの立ち絵などローカル素材のディレクトリ (env: MOCA_ASSETS_DIR)。
+    /// 作業タブの立ち絵などローカル素材のディレクトリ (env: `MOCA_ASSETS_DIR`)。
     /// /moca-assets で配信する。公式イラストは再配布禁止のためリポジトリに同梱せず、
-    /// 無ければ起動時に MOCA_ILLUST_URL からバックグラウンド DL して展開する
+    /// 無ければ起動時に `MOCA_ILLUST_URL` からバックグラウンド DL して展開する
     /// (bep-eng.dic と同方式。失敗しても立ち絵なしで動く)。
     pub assets_dir: String,
-    /// 立ち絵 zip の取得元 (env: MOCA_ILLUST_URL)。空文字で自動取得を無効化。
+    /// 立ち絵 zip の取得元 (env: `MOCA_ILLUST_URL`)。空文字で自動取得を無効化。
     pub moca_illust_url: String,
-    /// /work/talk のサーバ側タイムアウト秒 (env: WORK_TALK_TIMEOUT_SECS, 既定 60)。
+    /// /work/talk のサーバ側タイムアウト秒 (env: `WORK_TALK_TIMEOUT_SECS`, 既定 60)。
     /// クライアントは 20 秒で固定セリフに切り替えるが、CLI プロセスの後始末は
-    /// サーバ側の timeout + kill_on_drop が受け持つ。
+    /// サーバ側の timeout + `kill_on_drop` が受け持つ。
     pub work_talk_timeout_secs: u64,
 }
 

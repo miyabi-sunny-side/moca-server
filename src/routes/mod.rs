@@ -29,7 +29,7 @@ pub fn parse_id(s: &str) -> Result<i64, AppError> {
         .map_err(|_| AppError::BadRequest("invalid id".into()))
 }
 
-/// リクエストボディを serde_json::Value として読む。TS の
+/// リクエストボディを `serde_json::Value` として読む。TS の
 /// `await c.req.json().catch(() => ({}))` と同じく失敗時は空オブジェクトにフォールバック。
 pub fn parse_body(bytes: &Bytes) -> Value {
     serde_json::from_slice(bytes).unwrap_or_else(|_| json!({}))

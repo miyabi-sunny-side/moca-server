@@ -33,7 +33,7 @@ async fn audio_wav(
 
     // DB ロック内で行と辞書を取り切ってからロックを手放す (.await 前に drop する)。
     let (mode, text, script, entries) = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock()?;
         let row = get_line(&conn, line_id)?;
         let row = match row {
             Some(r) if r.project_id == project_id => r,
@@ -97,7 +97,7 @@ mod tests {
     fn fixture_wav() -> Vec<u8> {
         let mut b = Vec::new();
         b.extend_from_slice(b"RIFF");
-        b.extend_from_slice(&((36 + PCM_LEN) as u32).to_le_bytes());
+        b.extend_from_slice(&u32::try_from(36 + PCM_LEN).unwrap().to_le_bytes());
         b.extend_from_slice(b"WAVE");
         b.extend_from_slice(b"fmt ");
         b.extend_from_slice(&16u32.to_le_bytes());
@@ -108,7 +108,7 @@ mod tests {
         b.extend_from_slice(&2u16.to_le_bytes());
         b.extend_from_slice(&16u16.to_le_bytes());
         b.extend_from_slice(b"data");
-        b.extend_from_slice(&(PCM_LEN as u32).to_le_bytes());
+        b.extend_from_slice(&u32::try_from(PCM_LEN).unwrap().to_le_bytes());
         b.extend_from_slice(&[7u8; PCM_LEN]);
         b
     }

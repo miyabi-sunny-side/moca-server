@@ -24,10 +24,10 @@ fn main() -> io::Result<()> {
             input.read_exact(&mut size)?;
             let mut bytes = vec![0; u32::from_le_bytes(size) as usize];
             input.read_exact(&mut bytes)?;
-            args.push(String::from_utf8(bytes).unwrap());
+            args.push(String::from_utf8(bytes).map_err(io::Error::other)?);
         }
-        let text = &args[args.iter().position(|a| a == "-s").unwrap() + 1];
-        let file = &args[args.iter().position(|a| a == "-o").unwrap() + 1];
+        let text = arg_after(&args, "-s")?;
+        let file = arg_after(&args, "-o")?;
         match text.as_str() {
             "stall" => thread::sleep(Duration::from_secs(30)),
             "crash" => process::exit(3),
@@ -45,4 +45,11 @@ fn main() -> io::Result<()> {
         output.write_all(b"D")?;
         output.flush()?;
     }
+}
+
+fn arg_after<'a>(args: &'a [String], flag: &str) -> io::Result<&'a String> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .ok_or_else(|| io::Error::other(format!("missing {flag}")))
 }

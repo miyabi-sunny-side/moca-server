@@ -61,7 +61,7 @@ pub fn apply_dictionary(text: &str, entries: &[DictEntry]) -> String {
 
     let chars: Vec<char> = text.chars().collect();
     // ASCII 照合用に大小無視した並列配列 (非ASCII は原文のまま = 位置ずれしない)。
-    let lower: Vec<char> = chars.iter().map(|c| c.to_ascii_lowercase()).collect();
+    let lower: Vec<char> = chars.iter().map(char::to_ascii_lowercase).collect();
 
     let mut out = String::new();
     let mut i = 0;

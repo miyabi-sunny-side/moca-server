@@ -15,6 +15,7 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
+use std::fmt::Write;
 use std::time::Duration;
 
 #[derive(Deserialize, Clone, Copy, PartialEq)]
@@ -65,10 +66,10 @@ fn build_work_prompt(req: &TalkRequest) -> String {
             TalkPhase::Break => "休憩中",
             TalkPhase::Idle => "開始前",
         };
-        situation.push_str(&format!("- いまは{label}\n"));
+        let _ = writeln!(situation, "- いまは{label}");
     }
     if let Some(h) = ctx.hour {
-        situation.push_str(&format!("- 時刻はだいたい{h}時\n"));
+        let _ = writeln!(situation, "- 時刻はだいたい{h}時");
     }
 
     let task = match req.kind {

@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 pub const EMOTIONS: [&str; 5] = ["bosoboso", "doyaru", "honwaka", "angry", "teary"];
 
-/// 台本検証エラー。AppError::BadRequest にマップされる (TS の ScriptError 相当)。
+/// 台本検証エラー。`AppError::BadRequest` にマップされる (TS の `ScriptError` 相当)。
 #[derive(Debug)]
 pub struct ScriptError(pub String);
 
@@ -48,13 +48,10 @@ pub fn validate_script(input: &Value) -> Result<Value, ScriptError> {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|t| !t.is_empty());
-        let text = match text {
-            Some(t) => t,
-            None => {
-                return Err(ScriptError(format!(
-                    "segments[{i}]: \"text\" must be a non-empty string"
-                )))
-            }
+        let Some(text) = text else {
+            return Err(ScriptError(format!(
+                "segments[{i}]: \"text\" must be a non-empty string"
+            )));
         };
 
         let mut out = Map::new();

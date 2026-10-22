@@ -20,7 +20,7 @@ pub fn open(path: &str) -> Connection {
 
 pub fn init(conn: &Connection) {
     conn.execute_batch(
-        r#"
+        r"
         CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -43,7 +43,7 @@ pub fn init(conn: &Connection) {
             created_at TEXT NOT NULL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS dictionary_surface_idx ON dictionary(surface);
-        "#,
+        ",
     )
     .expect("Failed to initialize database schema");
 }

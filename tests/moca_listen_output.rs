@@ -25,7 +25,9 @@ struct Stream {
 }
 impl Stream {
     fn send(&self, text: &str) {
-        self.chunks.send(Some(text.as_bytes().to_vec())).unwrap();
+        self.chunks
+            .send(Some(text.as_bytes().to_vec()))
+            .expect("fixture stream is open");
     }
     fn close(&self) {
         let _ = self.chunks.send(None);
@@ -61,12 +63,15 @@ impl Server {
             }
             if let Some((key, value)) = header.split_once(':') {
                 if key.eq_ignore_ascii_case("content-length") {
-                    length = value.trim().parse::<usize>().unwrap();
+                    length = value
+                        .trim()
+                        .parse::<usize>()
+                        .expect("curl sends a numeric content-length");
                 }
             }
         }
         if first.starts_with("GET ") {
-            let reply = self.streams.lock().unwrap().pop_front();
+            let reply = self.streams.lock().expect("streams lock").pop_front();
             let Some(reply) = reply else {
                 return socket.write_all(b"HTTP/1.0 503 Unavailable\r\nContent-Length: 0\r\n\r\n");
             };
@@ -89,13 +94,13 @@ impl Server {
                 }
             }
         } else {
-            assert!(first.starts_with("POST "), "{first}");
+            assert!(first.starts_with("POST "), "unexpected request: {first}");
             let mut body = vec![0; length];
             input.read_exact(&mut body)?;
             self.bodies
                 .lock()
-                .unwrap()
-                .push(String::from_utf8(body.clone()).unwrap());
+                .expect("bodies lock")
+                .push(String::from_utf8(body.clone()).expect("listener posts UTF-8 text"));
             if body == b"fetch failure" {
                 socket.write_all(b"HTTP/1.0 500 Fixture\r\nContent-Length: 0\r\n\r\n")?;
             } else {
@@ -129,7 +134,7 @@ struct Listener {
 }
 impl Listener {
     fn new() -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().expect("create temp dir");
         for player in [
             "ffplay",
             "afplay",
@@ -148,9 +153,14 @@ impl Listener {
             "#!/bin/sh\nprintf 'C:/Temp/moca.wav\\n'\n",
         );
         let server = Arc::new(Server::default());
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind fixture server");
+        listener
+            .set_nonblocking(true)
+            .expect("set fixture server nonblocking");
+        let port = listener
+            .local_addr()
+            .expect("fixture server address")
+            .port();
         let state = server.clone();
         let server_thread = thread::spawn(move || {
             let mut connections = Vec::new();
@@ -163,13 +173,13 @@ impl Listener {
                         }));
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5))
+                        thread::sleep(Duration::from_millis(5));
                     }
                     Err(e) => panic!("{e}"),
                 }
             }
             for connection in connections {
-                connection.join().unwrap();
+                connection.join().expect("connection thread panicked");
             }
         });
         Self {
@@ -186,29 +196,34 @@ impl Listener {
     fn stream(&self, status: u16, content_type: &'static str) -> Stream {
         let (chunks, receiver) = mpsc::channel();
         let opened = Arc::new(AtomicBool::new(false));
-        self.server.streams.lock().unwrap().push_back(Reply {
-            status,
-            content_type,
-            chunks: receiver,
-            opened: opened.clone(),
-        });
+        self.server
+            .streams
+            .lock()
+            .expect("streams lock")
+            .push_back(Reply {
+                status,
+                content_type,
+                chunks: receiver,
+                opened: opened.clone(),
+            });
         Stream { chunks, opened }
     }
     fn sse(&self) -> Stream {
         self.stream(200, "text/event-stream")
     }
     fn start(&mut self, player: &str, extra: &[(&str, &str)]) {
-        assert!(self.child.is_none());
-        let listener = std::env::var_os("MOCA_LISTENER_UNDER_TEST")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("bin/moca-listen"));
-        let path = std::env::join_paths(
-            std::iter::once(self.directory.path().to_path_buf())
-                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-        )
-        .unwrap();
+        assert!(self.child.is_none(), "listener already started");
+        let listener = std::env::var_os("MOCA_LISTENER_UNDER_TEST").map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("bin/moca-listen"),
+            PathBuf::from,
+        );
+        let path =
+            std::env::join_paths(std::iter::once(self.directory.path().to_path_buf()).chain(
+                std::env::split_paths(&std::env::var_os("PATH").expect("PATH is set")),
+            ))
+            .expect("PATH entries contain no separator");
         self.child = Some(
-            Command::new(listener.canonicalize().unwrap())
+            Command::new(listener.canonicalize().expect("listener script exists"))
                 .process_group(0)
                 .env("PATH", path)
                 .env("MOCA_URL", format!("http://127.0.0.1:{}", self.port))
@@ -222,10 +237,10 @@ impl Listener {
                 .env_remove("PLAYER_FAIL")
                 .env_remove("PLAYER_FAIL_STATUS")
                 .envs(extra.iter().copied())
-                .stdout(File::create(self.path("stdout")).unwrap())
-                .stderr(File::create(self.path("stderr")).unwrap())
+                .stdout(File::create(self.path("stdout")).expect("create stdout file"))
+                .stderr(File::create(self.path("stderr")).expect("create stderr file"))
                 .spawn()
-                .unwrap(),
+                .expect("spawn listener"),
         );
     }
     fn read(&self, file: &str) -> String {
@@ -235,7 +250,7 @@ impl Listener {
         self.read(file).matches(text).count()
     }
     fn bodies(&self) -> Vec<String> {
-        self.server.bodies.lock().unwrap().clone()
+        self.server.bodies.lock().expect("bodies lock").clone()
     }
     fn wait(&self, ready: impl Fn() -> bool) {
         let end = Instant::now() + Duration::from_secs(4);
@@ -252,30 +267,45 @@ impl Listener {
     fn clean_states(&self) {
         for file in ["stdout", "stderr"] {
             let output = self.read(file);
-            assert!(!output.contains(['\x1b', '\r']), "{output:?}");
+            assert!(
+                !output.contains(['\x1b', '\r']),
+                "control characters in {output:?}"
+            );
             for line in output.lines() {
-                assert!(!line.trim().is_empty(), "{output:?}");
+                assert!(!line.trim().is_empty(), "blank line in {output:?}");
                 if line.contains("moca-listen:") {
                     let (stamp, _) = line
                         .strip_prefix('[')
-                        .unwrap()
-                        .split_once("] moca-listen: ")
-                        .unwrap();
-                    assert!(stamp.ends_with("+0900"), "{line}");
-                    let parsed =
-                        chrono::DateTime::parse_from_str(stamp, "%Y-%m-%d %H:%M:%S%z").unwrap();
-                    assert_eq!(parsed.format("%Y-%m-%d %H:%M:%S%z").to_string(), stamp);
+                        .and_then(|rest| rest.split_once("] moca-listen: "))
+                        .expect("log line starts with [timestamp] moca-listen:");
+                    assert!(stamp.ends_with("+0900"), "timestamp is not JST: {line}");
+                    let parsed = chrono::DateTime::parse_from_str(stamp, "%Y-%m-%d %H:%M:%S%z")
+                        .expect("timestamp format");
+                    assert_eq!(
+                        parsed.format("%Y-%m-%d %H:%M:%S%z").to_string(),
+                        stamp,
+                        "timestamp does not round-trip"
+                    );
                 }
             }
         }
     }
     fn signal(&self, signal: &str) {
-        signal_group(self.child.as_ref().unwrap().id(), signal);
+        signal_group(
+            self.child.as_ref().expect("listener is running").id(),
+            signal,
+        );
     }
     fn wait_exit(&mut self) -> ExitStatus {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
+            if let Some(status) = self
+                .child
+                .as_mut()
+                .expect("listener is running")
+                .try_wait()
+                .expect("poll listener")
+            {
                 return status;
             }
             assert!(Instant::now() < deadline, "listener failed to stop");
@@ -286,10 +316,10 @@ impl Listener {
         if let Some(mut child) = self.child.take() {
             signal_group(child.id(), "TERM");
             let deadline = Instant::now() + Duration::from_secs(3);
-            while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
+            while child.try_wait().expect("poll listener").is_none() && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
             }
-            if child.try_wait().unwrap().is_none() {
+            if child.try_wait().expect("poll listener").is_none() {
                 signal_group(child.id(), "KILL");
             }
             let _ = child.wait();
@@ -313,8 +343,8 @@ fn signal_group(pid: u32, signal: &str) {
         .status();
 }
 fn executable(path: &Path, text: &str) {
-    fs::write(path, text).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(path, text).expect("write executable");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod executable");
 }
 
 #[test]

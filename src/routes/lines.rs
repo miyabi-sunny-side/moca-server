@@ -67,10 +67,9 @@ async fn add(State(state): State<AppState>, Path(id): Path<String>, body: Bytes)
     let text = body
         .get("text")
         .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("");
+        .map_or("", str::trim);
 
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     if !project_exists(&conn, project_id)? {
         return Err(AppError::NotFound("not found".into()));
     }
@@ -104,7 +103,7 @@ async fn update(State(state): State<AppState>, Path(id): Path<String>, body: Byt
     let id = parse_id(&id)?;
     let body = parse_body(&body);
 
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     let Some(line) = get_line(&conn, id)? else {
         return Err(AppError::NotFound("not found".into()));
     };
@@ -119,9 +118,8 @@ async fn update(State(state): State<AppState>, Path(id): Path<String>, body: Byt
     }
 
     let mut new_mode = line.mode.clone();
-    match body.get("mode").and_then(Value::as_str) {
-        Some(m @ "announcer") | Some(m @ "acting") => new_mode = m.to_string(),
-        _ => {}
+    if let Some(m @ ("announcer" | "acting")) = body.get("mode").and_then(Value::as_str) {
+        new_mode = m.to_string();
     }
 
     // script は「キーが有る&null」「有る&値」「無い」の3状態を区別する。
@@ -147,7 +145,7 @@ async fn update(State(state): State<AppState>, Path(id): Path<String>, body: Byt
 // 行複製。mode/text/script ごとコピーして対象行の直下 (position+1) に挿入する。
 async fn duplicate(State(state): State<AppState>, Path(id): Path<String>) -> JsonResult {
     let id = parse_id(&id)?;
-    let mut conn = state.db.lock().unwrap();
+    let mut conn = state.db.lock()?;
     let Some(line) = get_line(&conn, id)? else {
         return Err(AppError::NotFound("not found".into()));
     };
@@ -180,13 +178,18 @@ async fn duplicate(State(state): State<AppState>, Path(id): Path<String>) -> Jso
 // 行削除
 async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> JsonResult {
     let id = parse_id(&id)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     let Some(line) = get_line(&conn, id)? else {
         return Err(AppError::NotFound("not found".into()));
     };
     conn.execute("DELETE FROM lines WHERE id = ?1", [id])?;
     touch_project(&conn, line.project_id)?;
     Ok((StatusCode::OK, Json(json!({ "ok": true }))))
+}
+
+// Vec の長さと添字は isize::MAX 以下なので i64 に収まる。
+fn len_i64(n: usize) -> i64 {
+    i64::try_from(n).expect("Vec length fits in i64")
 }
 
 // JS の Number(value) 相当。数値化できなければ None (NaN)。
@@ -210,7 +213,7 @@ async fn reorder(State(state): State<AppState>, Path(id): Path<String>, body: By
     let project_id = parse_id(&id)?;
     let body = parse_body(&body);
 
-    let mut conn = state.db.lock().unwrap();
+    let mut conn = state.db.lock()?;
     if !project_exists(&conn, project_id)? {
         return Err(AppError::NotFound("not found".into()));
     }
@@ -242,7 +245,7 @@ async fn reorder(State(state): State<AppState>, Path(id): Path<String>, body: By
         for (index, line_id) in order.iter().enumerate() {
             tx.execute(
                 "UPDATE lines SET position = ?1 WHERE id = ?2",
-                (index as i64, line_id),
+                (len_i64(index), line_id),
             )?;
         }
         tx.commit()?;
@@ -279,7 +282,7 @@ async fn import(
 
     // 位置計算と after シフトは両モード共通 (DB ロックは .await をまたがせない)。
     let start_pos = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock()?;
         if !project_exists(&conn, project_id)? {
             return Err(AppError::NotFound("not found".into()));
         }
@@ -294,7 +297,7 @@ async fn import(
                                 conn.execute(
                                     "UPDATE lines SET position = position + ?1 \
                                      WHERE project_id = ?2 AND position > ?3",
-                                    (texts.len() as i64, project_id, after_row.position),
+                                    (len_i64(texts.len()), project_id, after_row.position),
                                 )?;
                                 start_pos = after_row.position + 1;
                             }
@@ -311,7 +314,7 @@ async fn import(
     }
 
     // announcer: 一括 insert して JSON で即返す。
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     if texts.is_empty() {
         return Ok((
             StatusCode::OK,
@@ -325,7 +328,7 @@ async fn import(
             "INSERT INTO lines (project_id, position, mode, text, script) \
              VALUES (?1, ?2, 'announcer', ?3, NULL) \
              RETURNING id, project_id, position, mode, text, script",
-            (project_id, start_pos + i as i64, text),
+            (project_id, start_pos + len_i64(i), text),
             LineRow::from_row,
         )?;
         created.push(serialize_line(&row));
@@ -357,16 +360,15 @@ fn import_acting(state: AppState, project_id: i64, texts: Vec<String>, start_pos
                 Err(_) => ("announcer", None), // 失敗はデータを失わず announcer 保存。
             };
 
-            let row = {
-                let conn = state.db.lock().unwrap();
-                conn.query_row(
+            let row = state.db.lock().map_err(AppError::from).and_then(|conn| {
+                Ok(conn.query_row(
                     "INSERT INTO lines (project_id, position, mode, text, script) \
                      VALUES (?1, ?2, ?3, ?4, ?5) \
                      RETURNING id, project_id, position, mode, text, script",
-                    (project_id, start_pos + i as i64, mode, text, &script),
+                    (project_id, start_pos + len_i64(i), mode, text, &script),
                     LineRow::from_row,
-                )
-            };
+                )?)
+            });
             let row = match row {
                 Ok(r) => r,
                 Err(e) => {
@@ -392,8 +394,9 @@ fn import_acting(state: AppState, project_id: i64, texts: Vec<String>, start_pos
         }
 
         if total > 0 {
-            let conn = state.db.lock().unwrap();
-            let _ = touch_project(&conn, project_id);
+            if let Ok(conn) = state.db.lock() {
+                let _ = touch_project(&conn, project_id);
+            }
         }
         let _ = tx
             .send(Ok(Event::default()

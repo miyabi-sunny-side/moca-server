@@ -26,7 +26,7 @@ impl FallbackDict {
     }
 
     /// 辞書テキストを parse する。区切りはカンマ or 空白で、次の 2 形式を透過的に受ける。
-    /// bep-eng.dic (Shift_JIS→デコード済み) の `WORD ｶﾅ 0` は末尾フィールドを無視し、
+    /// bep-eng.dic (`Shift_JIS` → デコード済み) の `WORD ｶﾅ 0` は末尾フィールドを無視し、
     /// alkana 派生 CSV (UTF-8) の `word,カナ` はそのまま扱う。
     /// 先頭 2 トークンを 語/読み とし、語が全 ASCII 英字の行だけ採用する。
     /// 読みは NFKC で半角カナ→全角カナへ正規化する (`ｺﾐｯｸ`→`コミック`, `ｶﾞ`→`ガ`)。
@@ -89,7 +89,7 @@ impl FallbackDict {
 }
 
 /// キャッシュがあれば読み、無ければ url から DL してキャッシュへ保存し parse する。
-/// ネットワーク/非200/IO/デコードのいずれの失敗も warn して empty() を返す (パニック禁止)。
+/// ネットワーク/非200/IO/デコードのいずれの失敗も warn して `empty()` を返す (パニック禁止)。
 pub async fn load_or_download(cache_path: &str, url: &str) -> FallbackDict {
     let path = Path::new(cache_path);
 
@@ -141,8 +141,8 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// UTF-8 を試し、不正バイトがあれば Shift_JIS でデコードする。
-/// bep-eng.dic は Shift_JIS、alkana 派生 CSV は UTF-8 なので両方を透過的に扱える。
+/// UTF-8 を試し、不正バイトがあれば `Shift_JIS` でデコードする。
+/// bep-eng.dic は `Shift_JIS`、alkana 派生 CSV は UTF-8 なので両方を透過的に扱える。
 fn decode(bytes: &[u8]) -> String {
     let (text, _, had_errors) = encoding_rs::UTF_8.decode(bytes);
     if !had_errors {

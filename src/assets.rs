@@ -34,7 +34,7 @@ const MAX_ENTRIES: usize = 2_000;
 const MAX_TOTAL_UNCOMPRESSED: u64 = 1024 * 1024 * 1024;
 
 /// 素材が無ければ DL して展開する。冪等 (既にあれば何もしない)。
-/// URL が空なら自動取得は無効 (手動配置した MOCA_ASSETS_DIR をそのまま使う)。
+/// URL が空なら自動取得は無効 (手動配置した `MOCA_ASSETS_DIR` をそのまま使う)。
 pub async fn ensure_illust(dir: String, url: String) {
     cleanup_stale(&dir); // 前回クラッシュのステージング残骸 (150MB) を掃除
     if url.is_empty() {
@@ -131,7 +131,7 @@ async fn download_and_extract(dir: &str, url: &str) -> Result<usize, String> {
     Ok(count)
 }
 
-/// zip を out へ展開する。エントリ名は enclosed_name でサニタイズし (パス
+/// zip を out へ展開する。エントリ名は `enclosed_name` でサニタイズし (パス
 /// トラバーサル対策)、Thumbs.db だけ捨てる。利用ガイドライン txt は残す。
 /// エントリ数と展開後の総バイト数に上限を敷く (zip bomb 対策 — ヘッダの申告
 /// サイズではなく実際に書いたバイト数で数える)。
@@ -157,8 +157,8 @@ fn extract_zip(zip_path: &Path, out: &Path) -> Result<usize, String> {
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
         }
-        let mut dst = std::fs::File::create(&dest).map_err(|e| format!("create file: {e}"))?;
-        let written = std::io::copy(&mut (&mut entry).take(budget + 1), &mut dst)
+        let mut file = std::fs::File::create(&dest).map_err(|e| format!("create file: {e}"))?;
+        let written = std::io::copy(&mut (&mut entry).take(budget + 1), &mut file)
             .map_err(|e| format!("extract file: {e}"))?;
         if written > budget {
             return Err(format!("zip expands beyond {MAX_TOTAL_UNCOMPRESSED} bytes"));
@@ -181,7 +181,8 @@ mod tests {
         let mut buf = std::io::Cursor::new(Vec::new());
         let mut w = zip::ZipWriter::new(&mut buf);
         for (name, data) in entries {
-            w.start_file::<_, ()>(*name, Default::default()).unwrap();
+            w.start_file(*name, zip::write::FileOptions::<()>::default())
+                .unwrap();
             w.write_all(data).unwrap();
         }
         w.finish().unwrap();

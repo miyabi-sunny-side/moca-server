@@ -74,7 +74,7 @@ impl Voicepeak {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod resident {
-    use super::*;
+    use super::{extract_pcm, Stdio};
     use std::io::{Read, Write};
     use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -123,9 +123,16 @@ mod resident {
         {
             return Err("invalid resident voicepeak arguments".into());
         }
-        let mut bytes = (args.len() as u32).to_le_bytes().to_vec();
+        let mut bytes = u32::try_from(args.len())
+            .expect("checked <= 32")
+            .to_le_bytes()
+            .to_vec();
         for arg in args {
-            bytes.extend_from_slice(&(arg.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(
+                &u32::try_from(arg.len())
+                    .expect("checked <= 1 MiB")
+                    .to_le_bytes(),
+            );
             bytes.extend_from_slice(arg.as_bytes());
         }
         Ok(bytes)
@@ -133,7 +140,8 @@ mod resident {
 
     pub(super) fn complete_pcm(bytes: &[u8]) -> Result<Vec<u8>, String> {
         if bytes.len() < 12
-            || u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize + 8 != bytes.len()
+            || u32::from_le_bytes(bytes[4..8].try_into().expect("4..8 is 4 bytes")) as usize + 8
+                != bytes.len()
         {
             return Err("incomplete resident WAV".into());
         }
@@ -142,7 +150,8 @@ mod resident {
             let header = bytes
                 .get(pos..pos + 8)
                 .ok_or("incomplete WAV chunk header")?;
-            let size = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+            let size =
+                u32::from_le_bytes(header[4..8].try_into().expect("4..8 is 4 bytes")) as usize;
             pos += 8 + size + (size & 1);
             if pos > bytes.len() {
                 return Err("incomplete WAV chunk".into());
@@ -189,8 +198,8 @@ mod resident {
                 .kill_on_drop(true)
                 .spawn()
                 .map_err(|e| format!("resident spawn: {e}"))?;
-            let input = child.stdin.take().unwrap();
-            let output = child.stdout.take().unwrap();
+            let input = child.stdin.take().expect("stdin is piped");
+            let output = child.stdout.take().expect("stdout is piped");
             let mut process = Self {
                 child,
                 input,
@@ -226,7 +235,9 @@ mod resident {
 
     #[cfg(test)]
     mod tests {
+        use super::super::Voicepeak;
         use super::*;
+        use std::{path::Path, time::Duration};
 
         #[test]
         fn requires_the_verified_elf_build() {
@@ -287,8 +298,8 @@ mod resident {
                 .kill_on_drop(true)
                 .spawn()
                 .unwrap();
-            let input = child.stdin.take().unwrap();
-            let output = child.stdout.take().unwrap();
+            let input = child.stdin.take().expect("stdin is piped");
+            let output = child.stdout.take().expect("stdout is piped");
             let mut process = Process {
                 child,
                 input,

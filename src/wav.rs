@@ -7,7 +7,7 @@ pub struct WavFormat {
     pub bits_per_sample: u16,
 }
 
-/// 宮舞モカの出力フォーマット (実測: pcm_s16le / 48kHz / mono)。
+/// 宮舞モカの出力フォーマット (実測: `pcm_s16le` / 48kHz / mono)。
 pub const MOCA_FORMAT: WavFormat = WavFormat {
     sample_rate: 48000,
     channels: 1,
@@ -19,7 +19,7 @@ pub const MOCA_FORMAT: WavFormat = WavFormat {
 /// 0xFFFFFFFF (不定長) を入れる。ffplay やブラウザはこれで逐次再生できる。
 pub fn wav_header(format: &WavFormat) -> Vec<u8> {
     let block_align = format.channels * (format.bits_per_sample / 8);
-    let byte_rate = format.sample_rate * block_align as u32;
+    let byte_rate = format.sample_rate * u32::from(block_align);
 
     let mut b = Vec::with_capacity(44);
     b.extend_from_slice(b"RIFF");
@@ -82,10 +82,10 @@ mod tests {
         assert_eq!(&h[40..44], &0xFFFF_FFFFu32.to_le_bytes());
     }
 
-    fn chunk(id: &[u8; 4], data: &[u8]) -> Vec<u8> {
+    fn chunk(id: [u8; 4], data: &[u8]) -> Vec<u8> {
         let mut c = Vec::new();
-        c.extend_from_slice(id);
-        c.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        c.extend_from_slice(&id);
+        c.extend_from_slice(&u32::try_from(data.len()).unwrap().to_le_bytes());
         c.extend_from_slice(data);
         if data.len() % 2 == 1 {
             c.push(0); // word alignment padding
@@ -95,15 +95,15 @@ mod tests {
 
     #[test]
     fn extract_pcm_skips_leading_chunks() {
-        let pcm: Vec<u8> = (0..200u32).map(|i| i as u8).collect();
+        let pcm: Vec<u8> = (0..200u8).collect();
         let mut wav = Vec::new();
         wav.extend_from_slice(b"RIFF");
         wav.extend_from_slice(&0u32.to_le_bytes()); // size (ignored)
         wav.extend_from_slice(b"WAVE");
-        wav.extend_from_slice(&chunk(b"fmt ", &[0u8; 16]));
+        wav.extend_from_slice(&chunk(*b"fmt ", &[0u8; 16]));
         // LIST チャンク (奇数長でパディングが入る) を data の前に挟む。
-        wav.extend_from_slice(&chunk(b"LIST", b"INFOxyz"));
-        wav.extend_from_slice(&chunk(b"data", &pcm));
+        wav.extend_from_slice(&chunk(*b"LIST", b"INFOxyz"));
+        wav.extend_from_slice(&chunk(*b"data", &pcm));
         assert_eq!(extract_pcm(&wav).unwrap(), pcm);
     }
 

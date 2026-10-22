@@ -40,6 +40,13 @@ impl From<rusqlite::Error> for AppError {
     }
 }
 
+// Mutex は保持中の panic で poison される。以後の要求は 500 で返す。
+impl<T> From<std::sync::PoisonError<T>> for AppError {
+    fn from(e: std::sync::PoisonError<T>) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
+
 impl From<serde_json::Error> for AppError {
     fn from(e: serde_json::Error) -> Self {
         AppError::Internal(e.to_string())

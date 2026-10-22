@@ -23,13 +23,11 @@ fn required_fields(body: &Value) -> Result<(&str, &str), AppError> {
     let surface = body
         .get("surface")
         .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("");
+        .map_or("", str::trim);
     let reading = body
         .get("reading")
         .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("");
+        .map_or("", str::trim);
     if surface.is_empty() {
         return Err(AppError::BadRequest("surface required".into()));
     }
@@ -39,19 +37,19 @@ fn required_fields(body: &Value) -> Result<(&str, &str), AppError> {
     Ok((surface, reading))
 }
 
-fn entry_value(id: i64, surface: String, reading: String, created_at: String) -> Value {
-    json!({ "id": id, "surface": surface, "reading": reading, "created_at": created_at })
+fn entry_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
+    let (id, surface, reading, created_at): (i64, String, String, String) =
+        (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+    Ok(json!({ "id": id, "surface": surface, "reading": reading, "created_at": created_at }))
 }
 
 // 全件 (表記昇順の安定順)
 async fn list(State(state): State<AppState>) -> JsonResult {
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     let mut stmt =
         conn.prepare("SELECT id, surface, reading, created_at FROM dictionary ORDER BY surface")?;
     let rows = stmt
-        .query_map([], |r| {
-            Ok(entry_value(r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })?
+        .query_map([], entry_value)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok((StatusCode::OK, Json(Value::Array(rows))))
 }
@@ -61,7 +59,7 @@ async fn upsert(State(state): State<AppState>, body: Bytes) -> JsonResult {
     let body = parse_body(&body);
     let (surface, reading) = required_fields(&body)?;
 
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     let existing: Option<i64> = conn
         .query_row(
             "SELECT id FROM dictionary WHERE surface = ?1",
@@ -75,13 +73,13 @@ async fn upsert(State(state): State<AppState>, body: Bytes) -> JsonResult {
             "UPDATE dictionary SET reading = ?1 WHERE id = ?2 \
              RETURNING id, surface, reading, created_at",
             (reading, existing_id),
-            |r| Ok(entry_value(r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            entry_value,
         )?,
         None => conn.query_row(
             "INSERT INTO dictionary (surface, reading, created_at) VALUES (?1, ?2, ?3) \
              RETURNING id, surface, reading, created_at",
             (surface, reading, now_iso()),
-            |r| Ok(entry_value(r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            entry_value,
         )?,
     };
     Ok((StatusCode::CREATED, Json(row)))
@@ -92,7 +90,7 @@ async fn update(State(state): State<AppState>, Path(id): Path<String>, body: Byt
     let id = parse_id(&id)?;
     let body = parse_body(&body);
     let (surface, reading) = required_fields(&body)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     let exists: Option<i64> = conn
         .query_row("SELECT id FROM dictionary WHERE id = ?1", [id], |r| {
             r.get(0)
@@ -115,7 +113,7 @@ async fn update(State(state): State<AppState>, Path(id): Path<String>, body: Byt
         "UPDATE dictionary SET surface = ?1, reading = ?2 WHERE id = ?3 \
          RETURNING id, surface, reading, created_at",
         (surface, reading, id),
-        |r| Ok(entry_value(r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        entry_value,
     )?;
     Ok((StatusCode::OK, Json(row)))
 }
@@ -123,7 +121,7 @@ async fn update(State(state): State<AppState>, Path(id): Path<String>, body: Byt
 // 削除
 async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> JsonResult {
     let id = parse_id(&id)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     let exists: Option<i64> = conn
         .query_row("SELECT id FROM dictionary WHERE id = ?1", [id], |r| {
             r.get(0)

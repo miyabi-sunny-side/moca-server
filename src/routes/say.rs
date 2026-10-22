@@ -60,7 +60,7 @@ async fn say(
 
 // 辞書エントリを読む。DB ロックは .await をまたがせない (Send 制約) ため関数内で完結させる。
 fn load_entries(state: &AppState) -> Result<Vec<DictEntry>, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     Ok(load_dictionary(&conn)?)
 }
 
@@ -167,7 +167,7 @@ mod tests {
     fn fixture_wav() -> Vec<u8> {
         let mut b = Vec::new();
         b.extend_from_slice(b"RIFF");
-        b.extend_from_slice(&((36 + PCM_LEN) as u32).to_le_bytes());
+        b.extend_from_slice(&u32::try_from(36 + PCM_LEN).unwrap().to_le_bytes());
         b.extend_from_slice(b"WAVE");
         b.extend_from_slice(b"fmt ");
         b.extend_from_slice(&16u32.to_le_bytes());
@@ -178,7 +178,7 @@ mod tests {
         b.extend_from_slice(&2u16.to_le_bytes()); // block align
         b.extend_from_slice(&16u16.to_le_bytes());
         b.extend_from_slice(b"data");
-        b.extend_from_slice(&(PCM_LEN as u32).to_le_bytes());
+        b.extend_from_slice(&u32::try_from(PCM_LEN).unwrap().to_le_bytes());
         b.extend_from_slice(&[7u8; PCM_LEN]);
         b
     }
@@ -307,7 +307,7 @@ mod tests {
             .unwrap()
     }
 
-    fn post_json_wav(uri: &str, body: Value) -> Request<Body> {
+    fn post_json_wav(uri: &str, body: &Value) -> Request<Body> {
         Request::builder()
             .method(Method::POST)
             .uri(uri)
@@ -317,7 +317,7 @@ mod tests {
             .unwrap()
     }
 
-    fn post_json(uri: &str, body: Value) -> Request<Body> {
+    fn post_json(uri: &str, body: &Value) -> Request<Body> {
         Request::builder()
             .method(Method::POST)
             .uri(uri)
@@ -409,7 +409,7 @@ mod tests {
     async fn empty_array_is_400() {
         let fake = make_fake(0.0);
         let app = app_with(&fake);
-        let (status, _) = send(&app, post_json("/say", json!([]))).await;
+        let (status, _) = send(&app, post_json("/say", &json!([]))).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
@@ -479,7 +479,7 @@ mod tests {
         let state = state_with_fallback(&fake, "COMIC ｺﾐｯｸ 0\n");
         let app = routes().with_state(state);
         let script = json!([{ "text": "comic。" }]);
-        send(&app, post_json_wav("/say", script)).await;
+        send(&app, post_json_wav("/say", &script)).await;
         let recorded = std::fs::read_to_string(&fake.record).unwrap();
         assert!(recorded.contains("コミック。"), "recorded: {recorded}");
     }
@@ -490,7 +490,7 @@ mod tests {
         let fake = make_fake(0.0);
         let app = app_with(&fake);
         let script = json!([{ "text": "一。" }, { "text": "二。" }, { "text": "三。" }]);
-        let (status, body) = send(&app, post_json_wav("/say", script)).await;
+        let (status, body) = send(&app, post_json_wav("/say", &script)).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.starts_with(&header_prefix()));
         let count = std::fs::read_to_string(&fake.count).unwrap();
@@ -504,7 +504,7 @@ mod tests {
         let fake = make_fake(0.0);
         let app = app_with(&fake);
         let script = json!([{ "text": "一。", "pause": 100 }]);
-        let (status, body) = send(&app, post_json_wav("/say", script)).await;
+        let (status, body) = send(&app, post_json_wav("/say", &script)).await;
         assert_eq!(status, StatusCode::OK);
         // ヘッダ + PCM + pause(100ms * 96)。
         assert_eq!(body.len(), 44 + PCM_LEN + 100 * 96);

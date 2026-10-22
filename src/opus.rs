@@ -13,7 +13,7 @@ const BITRATE: u32 = 64000;
 /// Ogg logical stream serial。単一ストリームなので固定値でよい ("MOCA")。
 const SERIAL: u32 = 0x4d4f_4341;
 
-/// OpusHead パケット (19 bytes)。RFC 7845 §5.1。
+/// `OpusHead` パケット (19 bytes)。RFC 7845 §5.1。
 fn opus_head(pre_skip: u16) -> Vec<u8> {
     let mut v = Vec::with_capacity(19);
     v.extend_from_slice(b"OpusHead");
@@ -26,12 +26,16 @@ fn opus_head(pre_skip: u16) -> Vec<u8> {
     v
 }
 
-/// OpusTags パケット。vendor 文字列 + コメント 0 件。
+/// `OpusTags` パケット。vendor 文字列 + コメント 0 件。
 fn opus_tags() -> Vec<u8> {
     let vendor: &[u8] = b"moca-server";
     let mut v = Vec::with_capacity(20 + vendor.len());
     v.extend_from_slice(b"OpusTags");
-    v.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    v.extend_from_slice(
+        &u32::try_from(vendor.len())
+            .expect("vendor is 11 bytes")
+            .to_le_bytes(),
+    );
     v.extend_from_slice(vendor);
     v.extend_from_slice(&0u32.to_le_bytes()); // user comment list length
     v
@@ -53,14 +57,15 @@ pub struct OpusStream {
 }
 
 impl OpusStream {
-    /// エンコーダを初期化し OpusHead(BOS) / OpusTags ページを内部バッファへ書き込む。
+    /// エンコーダを初期化し `OpusHead` (BOS) / `OpusTags` ページを内部バッファへ書き込む。
     pub fn new() -> Result<Self, String> {
         let encoder = Encoder::builder(SAMPLE_RATE, Channels::Mono, Application::Audio)
             .bitrate(Bitrate::Bits(BITRATE))
             .build()
             .map_err(|e| format!("opus encoder init: {e}"))?;
         // pre-skip はエンコーダの lookahead (符号化遅延)。デコーダが先頭で読み飛ばす量。
-        let pre_skip = encoder.lookahead() as u16;
+        let pre_skip = u16::try_from(encoder.lookahead())
+            .map_err(|_| "opus lookahead exceeds u16".to_string())?;
 
         let mut writer = PacketWriter::new(Vec::new());
         writer
@@ -81,9 +86,9 @@ impl OpusStream {
     }
 
     /// s16le/mono PCM を投入する。960 サンプル揃うごとに 1 フレームずつエンコードして
-    /// Ogg ページ (EndPage) を出力する。端数は次回まで持ち越す。
+    /// Ogg ページ (`EndPage`) を出力する。端数は次回まで持ち越す。
     pub fn push_pcm(&mut self, pcm: &[u8]) -> Result<(), String> {
-        for ch in pcm.chunks_exact(2) {
+        for ch in pcm.as_chunks::<2>().0 {
             self.pcm_buf.push(i16::from_le_bytes([ch[0], ch[1]]));
         }
         self.input_samples += (pcm.len() / 2) as u64;
@@ -105,7 +110,7 @@ impl OpusStream {
         self.encoded_samples += FRAME_SAMPLES as u64;
         let granule = if end {
             // 末尾パディングを打ち切る: 出力尺 = granule - pre_skip = input_samples。
-            self.input_samples + self.pre_skip as u64
+            self.input_samples + u64::from(self.pre_skip)
         } else {
             self.encoded_samples
         };
@@ -122,7 +127,7 @@ impl OpusStream {
 
     /// 残りの端数フレームをパディングして flush し、EOS ページを出力する。
     pub fn finish(&mut self) -> Result<(), String> {
-        let target = self.input_samples + self.pre_skip as u64;
+        let target = self.input_samples + u64::from(self.pre_skip);
 
         // 出力すべきフレーム列を先に確定させ、最後の 1 枚を EndStream にする。
         let mut pending: Vec<Vec<i16>> = Vec::new();
@@ -194,8 +199,8 @@ mod tests {
         let mut s = OpusStream::new().unwrap();
         let pcm: Vec<u8> = (0..SAMPLE_RATE)
             .flat_map(|i| {
-                let t = i as f32 / SAMPLE_RATE as f32;
-                let v = ((t * 440.0 * std::f32::consts::TAU).sin() * 12000.0) as i16;
+                let t = f64::from(i) / f64::from(SAMPLE_RATE);
+                let v = ((t * 440.0 * std::f64::consts::TAU).sin() * 12000.0) as i16;
                 v.to_le_bytes()
             })
             .collect();
@@ -220,11 +225,12 @@ mod tests {
                 .unwrap();
             assert_eq!(n, FRAME_SAMPLES);
             frames += 1;
-            energy += out.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
+            energy += out.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>();
         }
         // 48000 サンプル + pre-skip パディング = 51〜52 フレーム程度。
         assert!(frames >= 50, "expected ~50 frames, got {frames}");
-        let rms = (energy / (frames as f64 * FRAME_SAMPLES as f64)).sqrt();
+        let rms = (energy / (f64::from(frames) * f64::from(u32::try_from(FRAME_SAMPLES).unwrap())))
+            .sqrt();
         assert!(rms > 4000.0, "decoded signal too quiet (rms={rms:.0})");
     }
 }

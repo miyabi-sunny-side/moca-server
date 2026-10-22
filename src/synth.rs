@@ -34,22 +34,22 @@ impl SynthQueue {
         }
     }
 
-    /// 待ち行列に加わり、ロックを取得したら SynthGuard を返す。
+    /// 待ち行列に加わり、ロックを取得したら `SynthGuard` を返す。
     /// Guard が drop されるまでロックを保持する。常駐プロセスは次の要求へ引き継ぐ。
     pub async fn enter(&self) -> SynthGuard<'_> {
         let waiting = self.depth.fetch_add(1, Ordering::SeqCst) + 1;
         tracing::debug!("synth queue depth: {waiting}");
         let permit = self.lock.lock().await;
         SynthGuard {
-            _permit: permit,
+            engine: permit,
             depth: &self.depth,
         }
     }
 }
 
-/// SynthQueue のロック保持証。Drop でロック解放と depth の減算を一元化する。
+/// `SynthQueue` のロック保持証。Drop でロック解放と depth の減算を一元化する。
 pub struct SynthGuard<'a> {
-    _permit: MutexGuard<'a, Voicepeak>,
+    engine: MutexGuard<'a, Voicepeak>,
     depth: &'a AtomicUsize,
 }
 
@@ -181,7 +181,7 @@ pub enum OutputFormat {
 }
 
 /// セグメント列を順に合成し、フォーマットに応じた音声フレームを mpsc へ送る。
-/// タスク先頭で synth.enter() してサーバー全体の合成を直列化する
+/// タスク先頭で `synth.enter()` してサーバー全体の合成を直列化する
 /// (ロックは本関数の終了まで保持)。
 pub async fn stream_synthesis(
     synth: Arc<SynthQueue>,
@@ -192,8 +192,8 @@ pub async fn stream_synthesis(
 ) {
     let mut guard = synth.enter().await;
     match format {
-        OutputFormat::Wav => stream_wav(&mut guard._permit, &cfg, &segments, &tx).await,
-        OutputFormat::Opus => stream_opus(&mut guard._permit, &cfg, &segments, &tx).await,
+        OutputFormat::Wav => stream_wav(&mut guard.engine, &cfg, &segments, &tx).await,
+        OutputFormat::Opus => Box::pin(stream_opus(&mut guard.engine, &cfg, &segments, &tx)).await,
     }
 }
 
@@ -214,15 +214,18 @@ async fn stream_wav(
     }
 
     for seg in segments {
-        let pcm = match synth_or_abort(engine, cfg, seg, tx).await {
-            Some(p) => p,
-            None => return,
+        let Some(pcm) = synth_or_abort(engine, cfg, seg, tx).await else {
+            return;
         };
         if tx.send(Ok(Bytes::from(pcm))).await.is_err() {
             return;
         }
 
-        let pause = seg.get("pause").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let pause = seg
+            .get("pause")
+            .and_then(Value::as_u64)
+            .and_then(|p| usize::try_from(p).ok())
+            .unwrap_or(0);
         if pause > 0 && tx.send(Ok(Bytes::from(silence_pcm(pause)))).await.is_err() {
             return;
         }
@@ -253,12 +256,15 @@ async fn stream_opus(
     }
 
     for seg in segments {
-        let pcm = match synth_or_abort(engine, cfg, seg, tx).await {
-            Some(p) => p,
-            None => return,
+        let Some(pcm) = synth_or_abort(engine, cfg, seg, tx).await else {
+            return;
         };
         // pause はエンコーダに 0 PCM として流す (Opus でも尺に反映)。
-        let pause = seg.get("pause").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let pause = seg
+            .get("pause")
+            .and_then(Value::as_u64)
+            .and_then(|p| usize::try_from(p).ok())
+            .unwrap_or(0);
         let encode = (|| {
             stream.push_pcm(&pcm)?;
             if pause > 0 {
@@ -307,7 +313,7 @@ async fn synth_or_abort(
                 None
             }
         },
-        _ = tx.closed() => None, // 受信側 drop = クライアント切断。合成タスクを中断し voicepeak を kill する。
+        () = tx.closed() => None, // 受信側 drop = クライアント切断。合成タスクを中断し voicepeak を kill する。
     }
 }
 

@@ -50,7 +50,7 @@ pub const SCRIPT_RULES: &str = r#"- 感情軸は bosoboso(ぼそぼそ・陰気)
 
 /// 指示と変換対象テキストを結合して 1 つのプロンプトにする。
 pub fn build_analyze_prompt(text: &str) -> String {
-    let head = r#"以下のテキストを、音声合成ソフト VOICEPEAK の「宮舞モカ」で読み上げるための台本JSONに変換してください。
+    let head = r"以下のテキストを、音声合成ソフト VOICEPEAK の「宮舞モカ」で読み上げるための台本JSONに変換してください。
 
 ルール:
 - まずテキスト全体を読み、話者の基調となるトーン(基調感情)を決める
@@ -58,7 +58,7 @@ pub fn build_analyze_prompt(text: &str) -> String {
   ただし各文の感情は基調感情を土台にし、文単位で完全に切り替えない。
   本文が明確に要求する場合以外、隣り合う文でトーンを急変させないこと
   (例: 疲れた発言の直後の文は、内容が前向きでも明るさを抑えて余韻を残す)
-"#;
+";
     format!("{head}{SCRIPT_RULES}\n\n変換対象のテキスト:\n{text}")
 }
 
@@ -142,7 +142,7 @@ impl Analyzer for CliAnalyzer {
     }
 }
 
-/// OpenAI 互換 backend。{base}/chat/completions を叩き choices[0].message.content を回収する。
+/// `OpenAI` 互換 backend。{base}/chat/completions を叩き choices[0].message.content を回収する。
 pub struct OpenaiAnalyzer {
     url: String,
     api_key: String,
@@ -195,8 +195,8 @@ impl Analyzer for OpenaiAnalyzer {
     }
 }
 
-/// backend の種別。none は analyze の前段で即 AnalyzeError にするため別扱いする
-/// (fetch_output の Err はリトライ対象なので、無効化はループ外で確定させる)。
+/// backend の種別。none は analyze の前段で即 `AnalyzeError` にするため別扱いする
+/// (`fetch_output` の Err はリトライ対象なので、無効化はループ外で確定させる)。
 pub enum Backend {
     Cli(CliAnalyzer),
     Openai(OpenaiAnalyzer),
@@ -233,9 +233,10 @@ pub fn create_analyzer_from_env() -> Backend {
                 .unwrap_or_else(|_| "claude -p --model haiku".into())
                 .trim()
                 .to_string();
-            if cmd.is_empty() {
-                panic!("ANALYZE_CMD must not be empty when ANALYZE_BACKEND=cli");
-            }
+            assert!(
+                !cmd.is_empty(),
+                "ANALYZE_CMD must not be empty when ANALYZE_BACKEND=cli"
+            );
             Backend::Cli(CliAnalyzer::new(cmd))
         }
         "openai" => {

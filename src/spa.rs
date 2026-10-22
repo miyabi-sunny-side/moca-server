@@ -14,23 +14,25 @@ fn read_index_html(path: &Path) -> Option<String> {
 
 fn mtime_ms(path: &Path) -> Option<u64> {
     let modified = fs::metadata(path).ok()?.modified().ok()?;
-    Some(
+    u64::try_from(
         modified
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
-            .as_millis() as u64,
+            .as_millis(),
     )
+    .ok()
 }
 
 // ビルド前は None (fallback が 404 を返す)。dev では mtime が変わると再読込する。
 // NODE_ENV=production は初回キャッシュを固定する。
 pub fn get_index_html() -> Option<String> {
     let path = Path::new(INDEX_PATH);
-    let is_prod = std::env::var("NODE_ENV")
-        .map(|v| v == "production")
-        .unwrap_or(false);
+    let is_prod = std::env::var("NODE_ENV").is_ok_and(|v| v == "production");
 
-    let mut cached = CACHED_HTML.lock().unwrap();
+    // cache は都度上書きできるので、poison されても中身をそのまま使う。
+    let mut cached = CACHED_HTML
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     if is_prod {
         if let Some((html, _)) = cached.as_ref() {

@@ -24,13 +24,15 @@ pub fn routes() -> Router<AppState> {
 }
 
 // project 行 (全列) を Value にする。
-fn project_value(id: i64, name: String, created_at: String, updated_at: String) -> Value {
-    json!({ "id": id, "name": name, "created_at": created_at, "updated_at": updated_at })
+fn project_value(r: &rusqlite::Row) -> rusqlite::Result<Value> {
+    let (id, name, created_at, updated_at): (i64, String, String, String) =
+        (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+    Ok(json!({ "id": id, "name": name, "created_at": created_at, "updated_at": updated_at }))
 }
 
 // 一覧: リストペイン用に行数と updated_at を付ける
 async fn list(State(state): State<AppState>) -> JsonResult {
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     let mut stmt = conn.prepare(
         "SELECT projects.id, projects.name, projects.created_at, projects.updated_at, \
          count(lines.id) AS lineCount \
@@ -57,19 +59,18 @@ async fn create(State(state): State<AppState>, body: Bytes) -> JsonResult {
     let name = body
         .get("name")
         .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("");
+        .map_or("", str::trim);
     if name.is_empty() {
         return Err(AppError::BadRequest("name required".into()));
     }
     let now = now_iso();
     let row = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock()?;
         conn.query_row(
             "INSERT INTO projects (name, created_at, updated_at) VALUES (?1, ?2, ?3) \
              RETURNING id, name, created_at, updated_at",
             (name, &now, &now),
-            |r| Ok(project_value(r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            project_value,
         )?
     };
     Ok((StatusCode::CREATED, Json(row)))
@@ -78,12 +79,12 @@ async fn create(State(state): State<AppState>, body: Bytes) -> JsonResult {
 // 単体 + その行を position 昇順で
 async fn get_one(State(state): State<AppState>, Path(id): Path<String>) -> JsonResult {
     let id = parse_id(&id)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock()?;
     let project = conn
         .query_row(
             "SELECT id, name, created_at, updated_at FROM projects WHERE id = ?1",
             [id],
-            |r| Ok(project_value(r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            project_value,
         )
         .optional()?;
     let Some(mut project) = project else {
@@ -106,19 +107,18 @@ async fn rename(State(state): State<AppState>, Path(id): Path<String>, body: Byt
     let name = body
         .get("name")
         .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("");
+        .map_or("", str::trim);
     if name.is_empty() {
         return Err(AppError::BadRequest("name required".into()));
     }
     let now = now_iso();
     let row = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock()?;
         conn.query_row(
             "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3 \
              RETURNING id, name, created_at, updated_at",
             (name, &now, id),
-            |r| Ok(project_value(r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            project_value,
         )
         .optional()?
     };
@@ -131,7 +131,7 @@ async fn rename(State(state): State<AppState>, Path(id): Path<String>, body: Byt
 // 削除 (lines も cascade 削除)
 async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> JsonResult {
     let id = parse_id(&id)?;
-    let mut conn = state.db.lock().unwrap();
+    let mut conn = state.db.lock()?;
     let exists: Option<i64> = conn
         .query_row("SELECT id FROM projects WHERE id = ?1", [id], |r| r.get(0))
         .optional()?;
