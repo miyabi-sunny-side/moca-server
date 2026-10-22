@@ -1,5 +1,8 @@
 # テスト
 
+commit 前に手元で以下を通す。GitHub Actions は release の build と公開だけを行い、検査は走らせない。
+
+- format・lint: `cargo fmt --check` と `cargo clippy --locked --all-targets --all-features -- -D warnings`
 - サーバー側 (Rust): `cargo test` で各モジュールのユニットテストが走る。
   Linux の常駐プロセス制御テストは Rust の隔離された子プロセスを使う。
   通常の `cargo test` が `voicepeak-test-process` example もビルドする。
