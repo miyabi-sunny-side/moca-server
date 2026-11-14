@@ -1031,8 +1031,9 @@ mod tests {
 
     #[tokio::test]
     async fn import_acting_streams_progress_and_saves_acting() {
+        // prompt の最後の行 (= 変換対象のセリフ) を、そのまま台本の text にして返す。
         let app = app_with_analyzer(cli_analyzer(
-            "cat >/dev/null; echo '[{\"text\":\"こんにちは。\",\"emotion\":{\"honwaka\":60}}]'",
+            r#"tail -n 1 | sed 's/.*/[{"text":"&","emotion":{"honwaka":60}}]/'"#,
         ));
         let p = create_project(&app, "import").await;
         let id = p["id"].as_i64().unwrap();

@@ -3,7 +3,7 @@
 | エンドポイント | 説明 |
 |---|---|
 | `GET /` | ブラウザ用の管理画面 (SPA) |
-| `POST /analyze` (本文=テキスト) | LLM backend で感情を推定し台本JSONを返す (約10秒)。`?carry=0〜0.9` で感情の引きずり量を調整 (デフォルト 1/3、0で無効) |
+| `POST /analyze` (本文=テキスト) | LLM backend で感情を推定し台本JSONを返す (約10秒)。`?carry=0〜0.9` で感情の引きずり量を調整 (デフォルト 1/3、0で無効)。backend 無効・失敗、台本として読めない出力、`text` が本文と違う出力は 502 |
 | `POST /say` (text/plain) | そのまま合成した音声をチャンク配信。既定は `audio/ogg` (Opus 64kbps)。`Accept: audio/wav` で可逆 WAV |
 | `POST /say` (application/json) | 台本JSONを感情パラメータ付きで合成 (既定 Opus / `Accept: audio/wav` で WAV) |
 | `GET /say?text=...` | text/plain 版と同じ (ブラウザの `<audio>` 向け) |

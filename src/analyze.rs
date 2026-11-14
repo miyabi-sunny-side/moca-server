@@ -5,10 +5,13 @@
 //   - none   … /analyze を無効化。呼ばれたら AnalyzeError
 
 use crate::error::AppError;
-use crate::script::{extract_json, smooth_script, validate_script, ScriptError};
+use crate::script::{
+    ensure_text_kept, extract_json, script_json_schema, smooth_script, validate_script, ScriptError,
+};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 /// 感情分析が無効/失敗したことを表すエラー。/analyze で 502 にマップされる。
@@ -43,7 +46,7 @@ pub const SCRIPT_RULES: &str = r#"- 感情軸は bosoboso(ぼそぼそ・陰気)
   遅くするのは「それに。」「愛しの先輩に会えますもんね」のように、からかうため
   あえて強調して言う時だけ。悲しい文・沈んだ文でも speed は下げず、
   bosoboso/teary と pause で表現すること
-- 出力はJSON配列のみ。コードフェンスや説明文は一切付けない
+- 出力はJSON配列のみ。コードフェンスや説明文は一切付けない。改行やインデントも入れず、1行で出力する
 
 出力スキーマ (1要素 = 1文):
 [{"text":"文","emotion":{"angry":80},"speed":110,"pitch":0,"pause":300}]"#;
@@ -64,9 +67,12 @@ pub fn build_analyze_prompt(text: &str) -> String {
 
 /// 任意プロンプトで LLM を叩き、出力を台本 JSON として検証・スムージングする
 /// 共通ループ。失敗したら最大 2 回まで再試行する。analyze と /work/talk が共有。
+/// source は読み上げたい元のセリフ。渡すと、台本の text がそれと違う出力も失敗に数える
+/// (LLM がセリフを作る /work/talk には元のセリフが無いので None)。
 pub async fn run_script_prompt(
     analyzer: &dyn Analyzer,
     prompt: &str,
+    source: Option<&str>,
     carry: f64,
 ) -> Result<Value, AnalyzeError> {
     let mut last_error = String::new();
@@ -79,7 +85,13 @@ pub async fn run_script_prompt(
                 continue;
             }
         };
-        match extract_json(&out).and_then(|v| validate_script(&v)) {
+        let checked = extract_json(&out)
+            .and_then(|v| validate_script(&v))
+            .and_then(|script| match source {
+                Some(source) => ensure_text_kept(&script, source).map(|()| script),
+                None => Ok(script),
+            });
+        match checked {
             Ok(script) => return Ok(smooth_script(&script, carry)),
             Err(ScriptError(msg)) => {
                 last_error = format!("analyzer returned an invalid script: {msg}");
@@ -142,22 +154,39 @@ impl Analyzer for CliAnalyzer {
     }
 }
 
+/// 相手が黙って接続を受けない時 (電源断など) に待つ上限。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// `OpenAI` 互換 backend。{base}/chat/completions を叩き choices[0].message.content を回収する。
 pub struct OpenaiAnalyzer {
     url: String,
     api_key: String,
     model: String,
+    extra_body: Map<String, Value>,
     client: reqwest::Client,
 }
 
 impl OpenaiAnalyzer {
-    pub fn new(api_base: &str, api_key: String, model: String) -> Self {
+    /// `extra_body` は要求へ足す相手ごとの項目 (thinking を切る指定など)。
+    /// timeout は 1 回の要求の上限で、None なら応答を待ち続ける。
+    pub fn new(
+        api_base: &str,
+        api_key: String,
+        model: String,
+        extra_body: Map<String, Value>,
+        timeout: Option<Duration>,
+    ) -> Self {
         let base = api_base.trim_end_matches('/');
+        let mut client = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT);
+        if let Some(timeout) = timeout {
+            client = client.timeout(timeout);
+        }
         Self {
             url: format!("{base}/chat/completions"),
             api_key,
             model,
-            client: reqwest::Client::new(),
+            extra_body,
+            client: client.build().expect("build the HTTP client"),
         }
     }
 }
@@ -169,13 +198,10 @@ impl Analyzer for OpenaiAnalyzer {
             .client
             .post(&self.url)
             .bearer_auth(&self.api_key)
-            .json(&json!({
-                "model": self.model,
-                "messages": [{ "role": "user", "content": prompt }],
-            }))
+            .json(&chat_body(&self.model, prompt, &self.extra_body))
             .send()
             .await
-            .map_err(|e| format!("openai request failed: {e}"))?;
+            .map_err(|e| format!("openai request failed: {}", error_chain(&e)))?;
 
         if !res.status().is_success() {
             let status = res.status().as_u16();
@@ -205,20 +231,99 @@ pub enum Backend {
 
 impl Backend {
     /// テキストを台本 JSON に変換する。none は TS と完全一致のメッセージで即エラー。
+    /// 台本の text が入力と違う出力は受け取らない (文字化け・言い換えを読み上げない)。
     pub async fn analyze(&self, text: &str, carry: f64) -> Result<Value, AnalyzeError> {
-        self.generate(&build_analyze_prompt(text), carry).await
+        self.run(&build_analyze_prompt(text), Some(text), carry)
+            .await
     }
 
     /// 任意プロンプトから台本 JSON を生成する (/work/talk の声かけが使う)。
     /// retry・検証・スムージングは analyze と同じ共通ループ。
     pub async fn generate(&self, prompt: &str, carry: f64) -> Result<Value, AnalyzeError> {
+        self.run(prompt, None, carry).await
+    }
+
+    async fn run(
+        &self,
+        prompt: &str,
+        source: Option<&str>,
+        carry: f64,
+    ) -> Result<Value, AnalyzeError> {
         match self {
-            Backend::Cli(a) => run_script_prompt(a, prompt, carry).await,
-            Backend::Openai(a) => run_script_prompt(a, prompt, carry).await,
+            Backend::Cli(a) => run_script_prompt(a, prompt, source, carry).await,
+            Backend::Openai(a) => run_script_prompt(a, prompt, source, carry).await,
             Backend::None => Err(AnalyzeError(
                 "analyze backend is disabled (set ANALYZE_BACKEND=cli or openai in .env)".into(),
             )),
         }
+    }
+}
+
+/// エラーを原因まで辿って 1 行にする。reqwest の表示は「送れなかった」までで、
+/// 接続拒否か時間切れかは原因 (source) の側にある。
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(error) = cause {
+        message = format!("{message}: {error}");
+        cause = error.source();
+    }
+    message
+}
+
+/// chat/completions へ送る本文。追加項目 (`OPENAI_EXTRA_BODY`) を足すが、
+/// model と messages は常に moca-server の値にする。
+fn chat_body(model: &str, prompt: &str, extra: &Map<String, Value>) -> Value {
+    let mut body = extra.clone();
+    body.insert("model".into(), Value::from(model));
+    body.insert(
+        "messages".into(),
+        json!([{ "role": "user", "content": prompt }]),
+    );
+    Value::Object(body)
+}
+
+/// `OPENAI_JSON_SCHEMA` を読む。`1` で台本の JSON Schema を要求に付ける。未設定・空・`0` は付けない。
+fn parse_json_schema_flag(raw: Option<&str>) -> Result<bool, String> {
+    match raw.map(str::trim) {
+        None | Some("" | "0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(other) => Err(format!("OPENAI_JSON_SCHEMA must be 0 or 1: {other}")),
+    }
+}
+
+/// 追加項目に、台本の JSON Schema を `response_format` として足す。
+fn with_script_schema(mut extra: Map<String, Value>) -> Map<String, Value> {
+    extra.insert(
+        "response_format".into(),
+        json!({
+            "type": "json_schema",
+            "json_schema": { "name": "script", "strict": true, "schema": script_json_schema() },
+        }),
+    );
+    extra
+}
+
+/// `OPENAI_EXTRA_BODY` を読む。未設定・空は追加なし。JSON object 以外は Err。
+fn parse_extra_body(raw: Option<&str>) -> Result<Map<String, Value>, String> {
+    let raw = raw.map(str::trim).filter(|r| !r.is_empty());
+    let Some(raw) = raw else {
+        return Ok(Map::new());
+    };
+    serde_json::from_str(raw).map_err(|e| format!("OPENAI_EXTRA_BODY must be a JSON object: {e}"))
+}
+
+/// `OPENAI_TIMEOUT_SECS` を読む。未設定・空は上限なし。1 以上の整数以外は Err。
+fn parse_timeout(raw: Option<&str>) -> Result<Option<Duration>, String> {
+    let raw = raw.map(str::trim).filter(|r| !r.is_empty());
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    match raw.parse::<u64>() {
+        Ok(secs) if secs > 0 => Ok(Some(Duration::from_secs(secs))),
+        _ => Err(format!(
+            "OPENAI_TIMEOUT_SECS must be a whole number of seconds (1 or more): {raw}"
+        )),
     }
 }
 
@@ -247,7 +352,17 @@ pub fn create_analyzer_from_env() -> Backend {
                 (Some(base), Some(key), Some(model))
                     if !base.is_empty() && !key.is_empty() && !model.is_empty() =>
                 {
-                    Backend::Openai(OpenaiAnalyzer::new(&base, key, model))
+                    let var = |name: &str| std::env::var(name).ok();
+                    let fail = |e: String| -> ! { panic!("{e}") };
+                    let extra = parse_extra_body(var("OPENAI_EXTRA_BODY").as_deref());
+                    let schema = parse_json_schema_flag(var("OPENAI_JSON_SCHEMA").as_deref());
+                    let timeout = parse_timeout(var("OPENAI_TIMEOUT_SECS").as_deref());
+                    let mut extra = extra.unwrap_or_else(|e| fail(e));
+                    if schema.unwrap_or_else(|e| fail(e)) {
+                        extra = with_script_schema(extra);
+                    }
+                    let timeout = timeout.unwrap_or_else(|e| fail(e));
+                    Backend::Openai(OpenaiAnalyzer::new(&base, key, model, extra, timeout))
                 }
                 _ => panic!(
                     "ANALYZE_BACKEND=openai requires OPENAI_API_BASE, OPENAI_API_KEY, OPENAI_MODEL"
@@ -273,8 +388,200 @@ mod tests {
     async fn cli_backend_returns_script() {
         let cmd = "cat >/dev/null; echo '[{\"text\":\"ok\"}]'".to_string();
         let backend = Backend::Cli(CliAnalyzer::new(cmd));
-        let out = backend.analyze("なにか", DEFAULT_CARRY).await.unwrap();
+        let out = backend.analyze("ok", DEFAULT_CARRY).await.unwrap();
         assert_eq!(out, json!([{ "text": "ok" }]));
+    }
+
+    #[tokio::test]
+    async fn analyze_rejects_a_script_whose_text_differs() {
+        let cmd = "cat >/dev/null; echo '[{\"text\":\"ok\"}]'".to_string();
+        let backend = Backend::Cli(CliAnalyzer::new(cmd));
+        let err = backend.analyze("なにか", DEFAULT_CARRY).await.unwrap_err();
+        assert!(
+            err.0.contains("differs from the input"),
+            "message: {}",
+            err.0
+        );
+    }
+
+    /// 決めた出力を順に返す backend。呼ばれた回数も数える。
+    struct Canned(std::sync::Mutex<Vec<Result<String, String>>>);
+
+    impl Canned {
+        fn new(outputs: &[Result<&str, &str>]) -> Self {
+            let outputs = outputs
+                .iter()
+                .rev()
+                .map(|o| o.map(str::to_string).map_err(str::to_string))
+                .collect();
+            Self(std::sync::Mutex::new(outputs))
+        }
+
+        fn remaining(&self) -> usize {
+            self.0.lock().unwrap().len()
+        }
+    }
+
+    #[async_trait]
+    impl Analyzer for Canned {
+        async fn fetch_output(&self, _prompt: &str) -> Result<String, String> {
+            self.0.lock().unwrap().pop().unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn garbled_text_is_retried_then_accepted() {
+        let llm = Canned::new(&[
+            Ok(r#"[{"text":"おはよウございます。"}]"#),
+            Ok(r#"[{"text":"おはようございます。"}]"#),
+        ]);
+        let out = run_script_prompt(&llm, "p", Some("おはようございます。"), 0.0)
+            .await
+            .unwrap();
+        assert_eq!(out, json!([{ "text": "おはようございます。" }]));
+    }
+
+    #[tokio::test]
+    async fn text_that_stays_different_is_an_error() {
+        let llm = Canned::new(&[
+            Ok(r#"[{"text":"おはよウございます。"}]"#),
+            Ok(r#"[{"text":"おはよう。"}]"#),
+            Ok(r#"[{"text":"おはようございます。"}]"#),
+        ]);
+        let err = run_script_prompt(&llm, "p", Some("おはようございます。"), 0.0)
+            .await
+            .unwrap_err();
+        assert!(
+            err.0.contains("differs from the input"),
+            "message: {}",
+            err.0
+        );
+        assert_eq!(llm.remaining(), 1, "must stop after two attempts");
+    }
+
+    #[tokio::test]
+    async fn generated_lines_have_no_source_to_compare() {
+        let llm = Canned::new(&[Ok(r#"[{"text":"がんばろっか"}]"#)]);
+        let out = run_script_prompt(&llm, "声かけを作って", None, 0.0)
+            .await
+            .unwrap();
+        assert_eq!(out, json!([{ "text": "がんばろっか" }]));
+    }
+
+    #[tokio::test]
+    async fn unreachable_backend_fails_after_two_attempts() {
+        let llm = Canned::new(&[
+            Err("connection refused"),
+            Err("connection refused"),
+            Ok("[]"),
+        ]);
+        let err = run_script_prompt(&llm, "p", Some("x"), 0.0)
+            .await
+            .unwrap_err();
+        assert_eq!(err.0, "connection refused");
+        assert_eq!(llm.remaining(), 1, "must stop after two attempts");
+    }
+
+    #[test]
+    fn error_chain_includes_every_cause() {
+        #[derive(Debug)]
+        struct Layer(&'static str, Option<Box<Layer>>);
+        impl std::fmt::Display for Layer {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+        impl std::error::Error for Layer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1.as_deref().map(|e| e as _)
+            }
+        }
+        let refused = Layer("connection refused", None);
+        let connect = Layer("client error (Connect)", Some(Box::new(refused)));
+        let send = Layer("error sending request", Some(Box::new(connect)));
+        assert_eq!(
+            error_chain(&send),
+            "error sending request: client error (Connect): connection refused"
+        );
+    }
+
+    #[test]
+    fn chat_body_without_extra_is_model_and_messages() {
+        assert_eq!(
+            chat_body("m", "やあ", &Map::new()),
+            json!({ "model": "m", "messages": [{ "role": "user", "content": "やあ" }] })
+        );
+    }
+
+    #[test]
+    fn chat_body_merges_extra_but_keeps_model_and_messages() {
+        let extra = parse_extra_body(Some(
+            r#"{"reasoning_effort":"none","model":"other","messages":[]}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            chat_body("m", "やあ", &extra),
+            json!({
+                "reasoning_effort": "none",
+                "model": "m",
+                "messages": [{ "role": "user", "content": "やあ" }],
+            })
+        );
+    }
+
+    #[test]
+    fn script_schema_is_sent_as_response_format() {
+        let extra = parse_extra_body(Some(r#"{"reasoning_effort":"none"}"#)).unwrap();
+        let body = chat_body("m", "やあ", &with_script_schema(extra));
+        assert_eq!(body["reasoning_effort"], "none");
+        assert_eq!(body["response_format"]["type"], "json_schema");
+        assert_eq!(
+            body["response_format"]["json_schema"]["schema"],
+            crate::script::script_json_schema()
+        );
+        assert_eq!(
+            body["response_format"]["json_schema"]["schema"]["type"],
+            "array"
+        );
+    }
+
+    #[test]
+    fn json_schema_flag_is_off_unless_one() {
+        assert_eq!(parse_json_schema_flag(None), Ok(false));
+        assert_eq!(parse_json_schema_flag(Some("")), Ok(false));
+        assert_eq!(parse_json_schema_flag(Some("0")), Ok(false));
+        assert_eq!(parse_json_schema_flag(Some("1")), Ok(true));
+        assert!(parse_json_schema_flag(Some("yes")).is_err());
+    }
+
+    #[test]
+    fn extra_body_unset_or_blank_adds_nothing() {
+        assert!(parse_extra_body(None).unwrap().is_empty());
+        assert!(parse_extra_body(Some("  ")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn extra_body_must_be_a_json_object() {
+        assert!(parse_extra_body(Some("{reasoning_effort:none}")).is_err());
+        assert!(parse_extra_body(Some(r#"["reasoning_effort"]"#)).is_err());
+    }
+
+    #[test]
+    fn timeout_unset_or_blank_means_no_limit() {
+        assert_eq!(parse_timeout(None), Ok(None));
+        assert_eq!(parse_timeout(Some(" ")), Ok(None));
+    }
+
+    #[test]
+    fn timeout_is_whole_seconds() {
+        assert_eq!(parse_timeout(Some("30")), Ok(Some(Duration::from_secs(30))));
+    }
+
+    #[test]
+    fn timeout_rejects_zero_and_non_numbers() {
+        assert!(parse_timeout(Some("0")).is_err());
+        assert!(parse_timeout(Some("30s")).is_err());
+        assert!(parse_timeout(Some("-1")).is_err());
     }
 
     #[tokio::test]

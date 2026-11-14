@@ -16,6 +16,36 @@
 - **`openai`** — `POST {OPENAI_API_BASE}/chat/completions` に `{model, messages:[{role:"user", content: プロンプト}]}` を投げ、`choices[0].message.content` を台本 JSON として解釈する。OpenAI Chat Completions 互換ならほぼそのまま通る。**依存**: 外部の HTTP エンドポイントのみ (追加インストール不要)。ローカル LLM (LM Studio / Ollama `/v1` / vLLM / LocalAI) に向ければ課金なしで動く。
 - **`none`** — `/analyze` を封じる。台本を手書きするか、事前生成した JSON だけを `/say` に投げる運用向け。**依存**: なし。
 
+`/analyze` は、返った台本の `text` を繋げたものが入力と違う時 (文字化け・言い換え・文の抜け) も失敗として扱う。
+比べるのは文字と数字だけで、空白・かぎ括弧・句読点の違いは許す。
+失敗はどの backend でも 2 回まで試し、それでも駄目なら 502 を返す。
+
+### OpenAI 互換 API への要求を調整する
+
+`openai` backend の要求は、既定では `{model, messages}` だけである。相手に合わせて次の 3 つを足せる。
+
+- `OPENAI_EXTRA_BODY` — 要求の本文へ足す JSON object。thinking を切る指定など、相手ごとの項目を書く。
+- `OPENAI_JSON_SCHEMA=1` — 台本の JSON Schema を `response_format` (`json_schema`) として付ける。
+  出力の形を縛れる相手 (llama.cpp の server など) で、壊れた JSON を防ぐ。配列を最上位に置く Schema なので、
+  最上位に object を求める API では使えない。
+- `OPENAI_TIMEOUT_SECS` — 1 回の要求を待つ秒数。未設定なら応答を待ち続ける。
+  相手が接続を受けない時は、この設定に関わらず 5 秒で諦める。
+
+llama.cpp の server で thinking のある model (Gemma 4 など) を使う例:
+
+```sh
+ANALYZE_BACKEND=openai
+OPENAI_API_BASE=http://localhost:8080/v1
+OPENAI_API_KEY=local
+OPENAI_MODEL=gemma-4-12b
+OPENAI_EXTRA_BODY='{"reasoning_effort":"none"}'
+OPENAI_JSON_SCHEMA=1
+OPENAI_TIMEOUT_SECS=60
+```
+
+thinking を切らないと、4 文のセリフに 1 分以上かかる (Gemma 4 12B・RTX 3060 での実測。切ると約 3 秒)。
+`OPENAI_API_KEY` は認証の無い相手でも空にできないので、任意の文字列を入れる。
+
 ## 作業タブの立ち絵素材
 
 作業タブ (ポモドーロ+声かけ) の立ち絵は公式配布イラストを使う。**再配布禁止のため

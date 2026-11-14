@@ -3,7 +3,7 @@
 // extract_json で LLM 出力から JSON 配列を切り出す。
 
 use crate::error::AppError;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 
 pub const EMOTIONS: [&str; 5] = ["bosoboso", "doyaru", "honwaka", "angry", "teary"];
 
@@ -28,6 +28,30 @@ fn js_round(n: f64) -> f64 {
 
 fn clamped_int(n: f64, min: f64, max: f64) -> Value {
     Value::from(clamp(js_round(n), min, max) as i64)
+}
+
+/// 台本の JSON Schema。`OpenAI` 互換 API の `response_format` に渡し、LLM の出力の形を縛る。
+pub fn script_json_schema() -> Value {
+    let integer = json!({ "type": "integer" });
+    let axes: Map<String, Value> = EMOTIONS
+        .iter()
+        .map(|axis| ((*axis).to_string(), integer.clone()))
+        .collect();
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "text": { "type": "string" },
+                "emotion": { "type": "object", "properties": axes, "additionalProperties": false },
+                "speed": integer,
+                "pitch": integer,
+                "pause": integer,
+            },
+            "required": ["text"],
+            "additionalProperties": false,
+        },
+    })
 }
 
 // 不正な構造は ScriptError を返し、範囲外の数値はクランプする。
@@ -94,6 +118,30 @@ pub fn validate_script(input: &Value) -> Result<Value, ScriptError> {
         return Err(ScriptError("script has no segments".into()));
     }
     Ok(Value::Array(segments))
+}
+
+/// 台本の text を順に繋げたものが、入力のセリフと同じ事を確かめる。
+/// LLM が文字を化かしたり言い換えたりした台本を、そのまま読み上げないための検査。
+/// 比べるのは読む文字 (文字と数字) だけで、空白・かぎ括弧・句読点の違いは許す。
+pub fn ensure_text_kept(script: &Value, source: &str) -> Result<(), ScriptError> {
+    let spoken: String = script
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|seg| seg.get("text").and_then(Value::as_str))
+        .collect();
+    if spoken_chars(&spoken) == spoken_chars(source) {
+        Ok(())
+    } else {
+        Err(ScriptError(format!(
+            "script text differs from the input: {}",
+            truncate_chars(&spoken, 200)
+        )))
+    }
+}
+
+fn spoken_chars(text: &str) -> String {
+    text.chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
 // script (配列) を検証して保存用文字列にする。不正なら ScriptError を返す。
@@ -215,7 +263,6 @@ pub fn extract_json(text: &str) -> Result<Value, ScriptError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn valid_script_passes_through() {
@@ -262,6 +309,111 @@ mod tests {
         assert!(validate_script(&json!([])).is_err());
         assert!(validate_script(&json!([{ "emotion": { "angry": 1 } }])).is_err());
         assert!(validate_script(&json!([{ "text": "  " }])).is_err());
+    }
+
+    // --- script_json_schema ---
+
+    // schema が許す項目を全て持つ台本が、検証でそのまま残る事 (schema と検証のずれを見つける)。
+    #[test]
+    fn schema_allows_exactly_what_validation_keeps() {
+        let item = &script_json_schema()["items"];
+        let fill = |props: &Value| -> Value {
+            let props = props.as_object().expect("properties");
+            props
+                .iter()
+                .map(|(key, prop)| {
+                    let value = match prop["type"].as_str() {
+                        Some("string") => json!("あ"),
+                        Some("integer") => json!(50),
+                        _ => Value::Null,
+                    };
+                    (key.clone(), value)
+                })
+                .collect::<Map<String, Value>>()
+                .into()
+        };
+        let mut segment = fill(&item["properties"]);
+        segment["emotion"] = fill(&item["properties"]["emotion"]["properties"]);
+
+        let keys = |v: &Value| {
+            v.as_object()
+                .expect("object")
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let mut axes = keys(&segment["emotion"]);
+        axes.sort();
+        let mut known = EMOTIONS.map(str::to_string).to_vec();
+        known.sort();
+        assert_eq!(axes, known, "schema must offer every emotion axis");
+        assert_eq!(
+            keys(&segment).len(),
+            5,
+            "text, emotion, speed, pitch, pause"
+        );
+        assert_eq!(item["required"], json!(["text"]));
+
+        let kept = validate_script(&json!([segment])).unwrap();
+        assert_eq!(kept, json!([segment]));
+    }
+
+    // LLM は prompt の説明と同じ順 (text → emotion → speed → pitch → pause、感情軸は EMOTIONS の順) で
+    // 書こうとする。schema の順が違うと、書けない項目で出力が崩れる (Gemma 4 12B で 40 回中 10 回)。
+    #[test]
+    fn schema_lists_properties_in_the_order_the_prompt_describes() {
+        let sent = script_json_schema().to_string();
+        let at = |key: &str| {
+            sent.find(&format!("\"{key}\":"))
+                .unwrap_or_else(|| panic!("{key} is missing: {sent}"))
+        };
+        let order = [
+            "text", "emotion", "bosoboso", "doyaru", "honwaka", "angry", "teary",
+        ];
+        let order = order.iter().chain(&["speed", "pitch", "pause"]);
+        let positions: Vec<usize> = order.map(|key| at(key)).collect();
+        assert!(positions.is_sorted(), "order in {sent}");
+    }
+
+    // --- ensure_text_kept ---
+
+    #[test]
+    fn text_split_into_sentences_is_kept() {
+        let script = json!([{ "text": "おはよう。" }, { "text": "今日は晴れ！" }]);
+        assert!(ensure_text_kept(&script, "おはよう。今日は晴れ！").is_ok());
+    }
+
+    #[test]
+    fn whitespace_differences_are_ignored() {
+        let script = json!([{ "text": "Hello world." }, { "text": "二行目。" }]);
+        assert!(ensure_text_kept(&script, " Hello  world.\n二行目。\n").is_ok());
+    }
+
+    #[test]
+    fn bracket_and_punctuation_differences_are_ignored() {
+        let script = json!([{ "text": "先輩、寝ましたか？" }, { "text": "寝たよ" }]);
+        assert!(ensure_text_kept(&script, "「先輩、寝ましたか?」\n「寝たよ。」").is_ok());
+    }
+
+    #[test]
+    fn garbled_character_is_rejected() {
+        let script = json!([{ "text": "おはよウございます。" }]);
+        let err = ensure_text_kept(&script, "おはようございます。").unwrap_err();
+        assert!(err.0.contains("おはよウございます。"), "message: {}", err.0);
+    }
+
+    #[test]
+    fn dropped_or_added_sentence_is_rejected() {
+        let source = "一つ目。二つ目。";
+        assert!(ensure_text_kept(&json!([{ "text": "一つ目。" }]), source).is_err());
+        let added = json!([{ "text": "一つ目。" }, { "text": "二つ目。" }, { "text": "三つ目。" }]);
+        assert!(ensure_text_kept(&added, source).is_err());
+    }
+
+    #[test]
+    fn reordered_sentences_are_rejected() {
+        let script = json!([{ "text": "二つ目。" }, { "text": "一つ目。" }]);
+        assert!(ensure_text_kept(&script, "一つ目。二つ目。").is_err());
     }
 
     // --- smooth_script ---

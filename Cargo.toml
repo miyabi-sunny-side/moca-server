@@ -14,7 +14,8 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tempfile = "3"
 rusqlite = { version = "0.33", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: LLM へ渡す台本の JSON Schema は項目の順に意味がある (src/script.rs)。
+serde_json = { version = "1", features = ["preserve_order"] }
 chrono = { version = "0.4", features = ["serde"] }
 dotenvy = "0.15"
 tracing = "0.1"

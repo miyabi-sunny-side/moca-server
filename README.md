@@ -52,6 +52,9 @@ Linux / Windows / macOS の native バイナリとは別に配布する。
 | `OPENAI_API_BASE` | `openai` 時必須 | なし | OpenAI 互換 API ベース URL。末尾の `/chat/completions` を自動付与。未設定・空は起動失敗、不正 URL は分析時に失敗 |
 | `OPENAI_API_KEY` | `openai` 時必須 | なし | API キー。未設定・空は起動失敗。不正な認証情報は API 呼び出し時に失敗。認証不要の API でも非空値が必要 |
 | `OPENAI_MODEL` | `openai` 時必須 | なし | モデル ID。未設定・空は起動失敗。利用不可のモデルは API 呼び出し時に失敗 |
+| `OPENAI_EXTRA_BODY` | 任意（`openai` 時に使用） | 追加なし | 要求の本文へ足す JSON object（例: `{"reasoning_effort":"none"}`）。`model` と `messages` は上書きされない。空は未設定扱い。JSON object でなければ起動失敗 ([使い方](./docs/config.md#openai-互換-api-への要求を調整する)) |
+| `OPENAI_JSON_SCHEMA` | 任意（`openai` 時に使用） | `0` | `1` で台本の JSON Schema を `response_format` として要求に付ける。空・`0` は付けない。それ以外は起動失敗 |
+| `OPENAI_TIMEOUT_SECS` | 任意（`openai` 時に使用） | 上限なし | 1 回の要求を待つ秒数。空は未設定扱い。1 以上の整数でなければ起動失敗 |
 | `BEP_DICT_PATH` | 任意 | `./bep-eng.dic` | フォールバック辞書キャッシュ。読めなければ取得を試す。保存失敗は警告し、取得済み辞書はメモリ上で利用 |
 | `BEP_DICT_URL` | 任意 | [alkana 派生 CSV](https://raw.githubusercontent.com/uesugi6111/alkana-rs/master/dictionary.csv) | キャッシュがない場合の取得元。空・不正 URL・取得失敗時は辞書無効で起動継続 |
 | `MOCA_ASSETS_DIR` | 任意 | `./moca-assets` | 立ち絵の保存・配信先。空値もそのまま扱う。取得・保存失敗は警告し、立ち絵なしで継続 |
