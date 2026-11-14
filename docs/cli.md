@@ -1,4 +1,4 @@
-# CLI クライアント (`bin/moca` / `bin/moca-notify` / `bin/moca-listen`)
+# CLI クライアント (`bin/moca` / `bin/moca-notify` / `bin/moca-listen` / `bin/moca-hear`)
 
 ## インストール
 
@@ -128,3 +128,26 @@ MOCA_VOLUME=30 moca-listen
 | `paplay` | ○ | `--volume N*65536/100` (0〜65536) |
 | `aplay` | × | 音量の option が無いので warning を 1 回出して 100 で再生する |
 | Windows SoundPlayer | × | API に音量が無いので warning を 1 回出して 100 で再生する |
+
+## 読みの聞き取り (`bin/moca-hear`)
+
+`moca-hear` は、音声が何と読んだかを聞き取り、OpenJTalk の音素を空白区切りの 1 行で返す。
+サーバーの[読みの確認](./config.md#読みの確認)が `READING_LISTEN_CMD` 経由で呼ぶ道具で、サーバーと同じ機械に置く。
+漢字かな交じりの文字起こしと違い、「一日」を「いちにち」と読んだか「ついたち」と読んだかがそのまま出る。
+
+```sh
+# 最新リリースの Assets から moca-hear と moca-hear.sha256 を同じ場所へ取得する
+sha256sum -c moca-hear.sha256
+install -m 755 moca-hear ~/.local/bin/moca-hear
+moca-hear --install            # model (63MB) を先に取得しておく
+curl -s -H 'Accept: audio/wav' --data-binary '今日も一日頑張りましょう。' "$MOCA_URL/say" | moca-hear
+# → ky o o m o ts u i t a ch i g a N b a r i m a sh o o
+```
+
+- 必要なのは [uv](https://docs.astral.sh/uv/) だけ。Python と依存 (onnxruntime・numpy・soxr) は、
+  script 先頭の指定から uv が用意する。
+- model は日本語の音素認識 (HuBERT base + CTC) の ONNX 4bit 版
+  ([air-air/japanese-hubert-base-phoneme-ctc-v4-ONNX](https://huggingface.co/air-air/japanese-hubert-base-phoneme-ctc-v4-ONNX)、Apache-2.0)。
+  版と sha256 を script に固定してあり、`MOCA_HEAR_DIR` (既定 `~/.local/share/moca-hear`) に置く。
+- CPU だけで動く。GPU は使わない。1 文あたり、起動を含めて約 0.5 秒。
+- 入力は 16bit PCM の WAV (mono / stereo、sampling rate は問わない)。WAV でない入力・model の取得失敗は exit 1。

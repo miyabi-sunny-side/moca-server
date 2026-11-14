@@ -4,6 +4,7 @@ mod dictionary;
 mod lines;
 mod notify;
 mod projects;
+mod reading;
 mod say;
 mod work;
 
@@ -44,6 +45,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(say::routes())
         .merge(audio::routes())
         .merge(analyze::routes())
+        .merge(reading::routes())
         .merge(notify::routes())
         .merge(work::routes())
         .nest_service("/assets", ServeDir::new("client/build/assets"))
@@ -104,6 +106,7 @@ mod tests {
             analyzer: Arc::new(analyzer),
             news_analyzer: None,
             fallback: Arc::new(crate::fallback::FallbackDict::empty()),
+            listener: None,
             notify,
         };
         build_router(state)

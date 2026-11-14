@@ -1,4 +1,4 @@
-import { sayTextUrl, sayScriptRequest } from '$lib/api.js';
+import { sayTextUrl, sayScriptUrl, sayScriptRequest } from '$lib/api.js';
 
 // Single global audio player. Two ways to start: a single line (play) or a
 // whole-project listen-through (playAll, "radio"). Exactly one line sounds at a
@@ -62,8 +62,8 @@ function revoke() {
 async function synthesize(line, signal) {
 	const res =
 		line.mode === 'acting' && line.script
-			? await fetch('/say', { ...sayScriptRequest(line.script), signal })
-			: await fetch(sayTextUrl(line.text, line.raw), { signal });
+			? await fetch(sayScriptUrl(line.id), { ...sayScriptRequest(line.script), signal })
+			: await fetch(sayTextUrl(line.text, line.raw, line.id), { signal });
 	if (!res.ok) throw new Error(`${res.status}`);
 	return res.blob();
 }
@@ -190,7 +190,7 @@ async function startLine(line) {
 	try {
 		if (line.mode === 'acting' && line.script) {
 			// POST script JSON, play the streamed blob.
-			const res = await fetch('/say', sayScriptRequest(line.script));
+			const res = await fetch(sayScriptUrl(line.id), sayScriptRequest(line.script));
 			if (my !== token) return; // superseded
 			if (!res.ok) throw new Error(`${res.status}`);
 			revoke();
@@ -198,7 +198,7 @@ async function startLine(line) {
 			if (my !== token) return;
 			el.src = objectUrl;
 		} else {
-			el.src = sayTextUrl(line.text, line.raw);
+			el.src = sayTextUrl(line.text, line.raw, line.id);
 		}
 		playingId = line.id;
 		await el.play();

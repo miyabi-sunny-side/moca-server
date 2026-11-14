@@ -53,8 +53,9 @@ Linux / Windows / macOS の native バイナリとは別に配布する。
 | `OPENAI_API_KEY` | `openai` 時必須 | なし | API キー。未設定・空は起動失敗。不正な認証情報は API 呼び出し時に失敗。認証不要の API でも非空値が必要 |
 | `OPENAI_MODEL` | `openai` 時必須 | なし | モデル ID。未設定・空は起動失敗。利用不可のモデルは API 呼び出し時に失敗 |
 | `OPENAI_EXTRA_BODY` | 任意（`openai` 時に使用） | 追加なし | 要求の本文へ足す JSON object（例: `{"reasoning_effort":"none"}`）。`model` と `messages` は上書きされない。空は未設定扱い。JSON object でなければ起動失敗 ([使い方](./docs/config.md#openai-互換-api-への要求を調整する)) |
-| `OPENAI_JSON_SCHEMA` | 任意（`openai` 時に使用） | `0` | `1` で台本の JSON Schema を `response_format` として要求に付ける。空・`0` は付けない。それ以外は起動失敗 |
+| `OPENAI_JSON_SCHEMA` | 任意（`openai` 時に使用） | `0` | `1` で出力の JSON Schema（台本・読みの確認）を `response_format` として要求に付ける。空・`0` は付けない。それ以外は起動失敗 |
 | `OPENAI_TIMEOUT_SECS` | 任意（`openai` 時に使用） | 上限なし | 1 回の要求を待つ秒数。空は未設定扱い。1 以上の整数でなければ起動失敗 |
+| `READING_LISTEN_CMD` | 任意 | 読みの確認は無効 | 合成した音声から読みを聞き取るコマンド（`sh -c` で実行。stdin に WAV、stdout に音素）。同梱の `moca-hear` を指定する。空は未設定扱い。実行失敗・120 秒の時間切れは、その行を確かめられなかったものとして扱う ([読みの確認](./docs/config.md#読みの確認)) |
 | `BEP_DICT_PATH` | 任意 | `./bep-eng.dic` | フォールバック辞書キャッシュ。読めなければ取得を試す。保存失敗は警告し、取得済み辞書はメモリ上で利用 |
 | `BEP_DICT_URL` | 任意 | [alkana 派生 CSV](https://raw.githubusercontent.com/uesugi6111/alkana-rs/master/dictionary.csv) | キャッシュがない場合の取得元。空・不正 URL・取得失敗時は辞書無効で起動継続 |
 | `MOCA_ASSETS_DIR` | 任意 | `./moca-assets` | 立ち絵の保存・配信先。空値もそのまま扱う。取得・保存失敗は警告し、立ち絵なしで継続 |
@@ -75,6 +76,7 @@ Linux / Windows / macOS の native バイナリとは別に配布する。
 | `MOCA_RETRY_DELAY` | `2` | `moca-listen` の再接続待機秒。事前検証せず `sleep` に渡すため、不正値では待機に失敗 |
 | `MOCA_PLAYER` | 利用可能なプレイヤーを自動選択 | `moca-listen` の再生方法。未知値・指定プレイヤー未導入なら exit 1。選択肢は [CLI ドキュメント](./docs/cli.md) |
 | `MOCA_VOLUME` | `100` | `moca-listen` の音量（1〜100 の整数、`--volume` 優先）。範囲外・非数値は exit 2 |
+| `MOCA_HEAR_DIR` | `${XDG_DATA_HOME:-~/.local/share}/moca-hear` | `moca-hear` が音素認識の model（63MB）を置くディレクトリ。無ければ初回に取得する。取得失敗・checksum 不一致は exit 1 |
 | `TMPDIR` | `/tmp` | `moca-listen` の WAV と ffplay 診断の一時ファイルを置く OS 用ディレクトリ。作成不能ならその再生に失敗 |
 
 コマンド名で指定した VOICEPEAK、LLM CLI、クライアントのプレイヤーなどは OS の
@@ -85,6 +87,12 @@ Linux / Windows / macOS の native バイナリとは別に配布する。
 ブラウザで `http://localhost:3000/` を開くと管理画面 (台本工房)。
 台本の作成・感情の微調整・再生ができ、[vim 風のキーボード操作](./docs/shortcuts.md)に対応する
 (アプリ内の `?` キーでも一覧表示)。
+
+読みの確認: 台本のヘッダーの耳のボタンを押すと、project の行を順に確かめる。
+生成 AI が文脈から決めた読みと、合成した音声を聞き取った読みを比べ、読み違えた語
+（「今日も一日」を「ついたち」など）だけを平仮名・カタカナにした読み上げ用の表記を行に保存する。
+画面に出る文は変わらない。保存した表記は以後の読み上げに使われ、行ごとに外せる。
+準備は [設定](./docs/config.md#読みの確認) を参照。
 
 CLI クライアント (`bash` / `curl` / `ffplay` があれば動く):
 
@@ -118,7 +126,7 @@ set-hook -g alert-bell 'run-shell "moca-notify \"#{session_name} が待ってま
 - [アーキテクチャと設計方針](./docs/architecture.md)
 - [CLI クライアントの詳しい使い方](./docs/cli.md)
 - [API リファレンス (台本JSONスキーマ・制限)](./docs/api.md)
-- [設定 (環境変数・感情分析 backend・カタカナ辞書)](./docs/config.md)
+- [設定 (環境変数・感情分析 backend・読みの確認・カタカナ辞書)](./docs/config.md)
 - [キーボードショートカット](./docs/shortcuts.md)
 - [常駐化 (systemd)・自動更新](./docs/deploy.md)
 - [テスト (cargo test / Playwright E2E)](./docs/testing.md)

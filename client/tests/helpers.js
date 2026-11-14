@@ -38,8 +38,29 @@ export function silentWav(seconds = 3) {
 }
 
 // Factory: a line with the server's field shape.
-export function line(mode, text, { id, script = null } = {}) {
-	return { id: id ?? nextId('l'), mode, text, script };
+export function line(mode, text, { id, script = null, reading = null } = {}) {
+	return { id: id ?? nextId('l'), mode, text, script, reading };
+}
+
+// Factory: a stored reading-check result for a one-sentence line (server shape).
+// `words` are the mismatched words: [{ surface, expected, heard, action }].
+export function reading(status, text, { expected, heard, spoken = null, words = [] } = {}) {
+	return {
+		status,
+		checked_at: '2026-01-01T00:00:00.000Z',
+		secs: 6.2,
+		segments: [
+			{
+				text,
+				status,
+				expected: expected ?? text,
+				heard: heard ?? expected ?? text,
+				spoken,
+				words,
+				error: null
+			}
+		]
+	};
 }
 
 // Factory: a project. `lines` are ordered; position is derived from the index.
@@ -85,7 +106,8 @@ function serializeDetail(p) {
 			position: i,
 			mode: l.mode,
 			text: l.text,
-			script: l.script
+			script: l.script,
+			reading: l.reading ?? null
 		}))
 	};
 }
@@ -104,6 +126,9 @@ const jsonBody = (data) => ({
 // the default empty audio/mpeg body — needed by the play/stop test (see silentWav).
 // `workTalkResult` (optional script array): when set, POST /work/talk returns it;
 // otherwise the route answers 502 so tests exercise the fixed-line fallback path.
+// `readingCheck` (optional): what POST …/reading/check does. `{ refuse: 'message' }`
+// answers 502; otherwise a map of line id → reading (see reading()) or
+// `{ failed: 'reason' }`. Lines not in the map are reported as already checked.
 export async function installApi(
 	page,
 	{
@@ -111,15 +136,16 @@ export async function installApi(
 		dictionary = [],
 		analyzeResult = [{ happy: 0 }],
 		sayAudio = null,
-		workTalkResult = null
+		workTalkResult = null,
+		readingCheck = {}
 	} = {}
 ) {
 	const store = { projects, dictionary };
 	const requests = [];
-	const find = (id) => store.projects.find((p) => p.id === id);
+	const find = (id) => store.projects.find((p) => String(p.id) === String(id));
 	const findLine = (id) => {
 		for (const p of store.projects) {
-			const l = p.lines.find((x) => x.id === id);
+			const l = p.lines.find((x) => String(x.id) === String(id));
 			if (l) return { p, l };
 		}
 		return null;
@@ -129,7 +155,8 @@ export async function installApi(
 	await page.route(/\/(api|analyze|say|notify|work\/talk)\b/, async (route) => {
 		const req = route.request();
 		const method = req.method();
-		const path = new URL(req.url()).pathname;
+		const url = new URL(req.url());
+		const path = url.pathname;
 		const text = req.postData() ?? null;
 		let json = null;
 		try {
@@ -137,7 +164,7 @@ export async function installApi(
 		} catch {
 			json = null; // /analyze sends raw text, not JSON
 		}
-		requests.push({ method, path, json, text });
+		requests.push({ method, path, json, text, query: Object.fromEntries(url.searchParams) });
 
 		// --- /notify/stream: open an SSE stream that never emits, to avoid a hang. ---
 		if (path.startsWith('/notify/stream')) {
@@ -215,8 +242,53 @@ export async function installApi(
 			return route.fulfill(jsonBody(serializeDetail(p)));
 		}
 
+		// --- Reading check: POST /api/projects/:id/reading/check -> SSE, one event per line ---
+		let m = path.match(/^\/api\/projects\/([^/]+)\/reading\/check$/);
+		if (m && method === 'POST') {
+			if (readingCheck.refuse)
+				return route.fulfill({ ...jsonBody({ error: readingCheck.refuse }), status: 502 });
+			const p = find(m[1]);
+			const events = p.lines.map((l, i) => {
+				const result = readingCheck[l.id];
+				let status = 'skipped';
+				if (result?.failed) status = 'failed';
+				else if (result) {
+					status = 'checked';
+					l.reading = result;
+				}
+				const data = {
+					index: i + 1,
+					total: p.lines.length,
+					status,
+					error: result?.failed ?? null,
+					line: { ...l, project_id: p.id, position: i }
+				};
+				return `data: ${JSON.stringify(data)}\n\n`;
+			});
+			const done = `event: complete\ndata: ${JSON.stringify({ total: p.lines.length })}\n\n`;
+			return route.fulfill({
+				status: 200,
+				contentType: 'text/event-stream',
+				body: events.join('') + done
+			});
+		}
+
+		// --- Dismiss a fix: POST /api/lines/:id/reading/dismiss ---
+		m = path.match(/^\/api\/lines\/([^/]+)\/reading\/dismiss$/);
+		if (m && method === 'POST') {
+			const hit = findLine(m[1]);
+			for (const seg of hit.l.reading.segments) {
+				if (seg.spoken) {
+					seg.spoken = null;
+					seg.status = 'dismissed';
+				}
+			}
+			hit.l.reading.status = 'dismissed';
+			return route.fulfill(jsonBody({ ...hit.l, project_id: hit.p.id }));
+		}
+
 		// --- Reorder: PUT /api/projects/:id/lines/order  { order: [...] } ---
-		let m = path.match(/^\/api\/projects\/([^/]+)\/lines\/order$/);
+		m = path.match(/^\/api\/projects\/([^/]+)\/lines\/order$/);
 		if (m && method === 'PUT') {
 			const p = find(m[1]);
 			if (p) {

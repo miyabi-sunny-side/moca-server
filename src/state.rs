@@ -1,6 +1,7 @@
 use crate::analyze::Backend;
 use crate::config::Config;
 use crate::fallback::FallbackDict;
+use crate::listen::Listener;
 use crate::synth::SynthQueue;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
@@ -21,6 +22,8 @@ pub struct AppState {
     pub news_analyzer: Option<Arc<Backend>>,
     /// 英単語→カタカナのフォールバック辞書 (bep-eng.dic 由来)。SQLite 辞書の後段に適用する。
     pub fallback: Arc<FallbackDict>,
+    /// 合成した音声から読みを聞き取る道具 (`READING_LISTEN_CMD`)。None なら読みの確認は使えない。
+    pub listener: Option<Arc<Listener>>,
     /// 通知 pub/sub。/notify で send、/notify/stream で subscribe する broadcast。
     pub notify: tokio::sync::broadcast::Sender<String>,
 }

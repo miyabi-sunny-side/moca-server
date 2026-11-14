@@ -7,7 +7,8 @@ use crate::dictionary::{
 };
 use crate::error::AppError;
 use crate::fallback::FallbackDict;
-use crate::serialize::get_line;
+use crate::reading::{apply_reading, LineReading};
+use crate::serialize::{get_line, LineRow};
 use crate::state::AppState;
 use crate::synth::{split_sentences, OutputFormat};
 use axum::extract::{Path, State};
@@ -32,7 +33,7 @@ async fn audio_wav(
     let line_id = super::parse_id(&line_id)?;
 
     // DB ロック内で行と辞書を取り切ってからロックを手放す (.await 前に drop する)。
-    let (mode, text, script, entries) = {
+    let (row, entries) = {
         let conn = state.db.lock()?;
         let row = get_line(&conn, line_id)?;
         let row = match row {
@@ -40,19 +41,15 @@ async fn audio_wav(
             _ => return Err(AppError::NotFound("line not found".into())),
         };
         let entries = load_dictionary(&conn)?;
-        (row.mode, row.text, row.script, entries)
+        (row, entries)
     };
 
-    // acting かつ script が保存されていれば台本経路、それ以外は text を文分割する経路。
-    // acting だが script が NULL の場合も 404/500 にせず text 経路に落とす (データを失わない)。
-    // SQLite 辞書を適用したうえで、後段にフォールバック辞書 (英単語→カタカナ) を重ねる。
-    let segments = match script {
-        Some(s) if mode == "acting" => stored_script_segments(&s, &entries, &state.fallback)?,
-        _ => split_sentences(&state.fallback.apply(&apply_dictionary(&text, &entries)))
-            .into_iter()
-            .map(|s| json!({ "text": s }))
-            .collect(),
-    };
+    // 読みの確認で直した表記があれば、その segment だけ差し替える。
+    let reading = LineReading::parse(row.reading.as_deref());
+    let segments = apply_reading(
+        line_segments(&row, &entries, &state.fallback)?,
+        reading.as_ref(),
+    );
 
     // 動画素材は可逆が正なので Accept 不問で常に WAV。say の WAV 経路をそのまま通す。
     Ok(super::say::stream_response(
@@ -60,6 +57,26 @@ async fn audio_wav(
         segments,
         OutputFormat::Wav,
     ))
+}
+
+/// 保存済みの行を、読み上げる segment の列にする (辞書を適用した後の、VOICEPEAK へ渡す文)。
+/// acting かつ script が保存されていれば台本経路、それ以外は text を文分割する経路。
+/// acting だが script が NULL の場合も 404/500 にせず text 経路に落とす (データを失わない)。
+/// `SQLite` 辞書を適用したうえで、後段にフォールバック辞書 (英単語→カタカナ) を重ねる。
+pub(super) fn line_segments(
+    row: &LineRow,
+    entries: &[DictEntry],
+    fallback: &FallbackDict,
+) -> Result<Vec<Value>, AppError> {
+    match &row.script {
+        Some(script) if row.mode == "acting" => stored_script_segments(script, entries, fallback),
+        _ => Ok(
+            split_sentences(&fallback.apply(&apply_dictionary(&row.text, entries)))
+                .into_iter()
+                .map(|s| json!({ "text": s }))
+                .collect(),
+        ),
+    }
 }
 
 /// 保存済み script 文字列 (保存時に検証済み) を parse し、各 segment.text に
@@ -172,6 +189,7 @@ mod tests {
             analyzer: Arc::new(crate::analyze::Backend::None),
             news_analyzer: None,
             fallback: Arc::new(crate::fallback::FallbackDict::empty()),
+            listener: None,
             notify,
         }
     }

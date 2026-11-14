@@ -33,7 +33,8 @@ pub fn init(conn: &Connection) {
             position INTEGER NOT NULL,
             mode TEXT NOT NULL,
             text TEXT NOT NULL,
-            script TEXT
+            script TEXT,
+            reading TEXT
         );
         CREATE INDEX IF NOT EXISTS lines_project_position_idx ON lines(project_id, position);
         CREATE TABLE IF NOT EXISTS dictionary (
@@ -46,6 +47,25 @@ pub fn init(conn: &Connection) {
         ",
     )
     .expect("Failed to initialize database schema");
+    add_column_if_missing(conn, "lines", "reading", "TEXT");
+}
+
+/// 後から足した列を、既にある DB にも足す (`CREATE TABLE IF NOT EXISTS` は列を足さない)。
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, kind: &str) {
+    let exists: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM pragma_table_info(?1) WHERE name = ?2",
+            [table, column],
+            |row| row.get(0),
+        )
+        .expect("Failed to read the table columns");
+    if !exists {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"),
+            [],
+        )
+        .expect("Failed to add a column");
+    }
 }
 
 #[cfg(test)]
@@ -64,6 +84,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 3);
+    }
+
+    // reading 列が無かった頃の DB を開いても、行を保ったまま列が足される。
+    #[test]
+    fn init_adds_the_reading_column_to_an_older_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE lines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                mode TEXT NOT NULL,
+                text TEXT NOT NULL,
+                script TEXT
+            );
+            INSERT INTO lines (project_id, position, mode, text) VALUES (1, 0, 'announcer', '前からある行');",
+        )
+        .unwrap();
+        init(&conn);
+        init(&conn);
+        let (text, reading): (String, Option<String>) = conn
+            .query_row("SELECT text, reading FROM lines", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(text, "前からある行");
+        assert_eq!(reading, None);
     }
 
     #[test]

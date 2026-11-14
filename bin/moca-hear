@@ -1,0 +1,137 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "numpy>=1.26",
+#   "onnxruntime>=1.20",
+#   "soxr>=0.5",
+# ]
+# ///
+"""moca-hear — 音声が「何と読んだか」を聞き取り、音素で返す。
+
+  moca-hear < speech.wav        # → s o r e d e w a ky o o m o ...
+  moca-hear --install           # model を取得するだけ (初回の待ちを先に済ませる)
+
+moca-server の読みの確認 (READING_LISTEN_CMD) が、合成した音声を stdin に流して呼ぶ。
+返すのは OpenJTalk の音素を空白で区切った 1 行。漢字かな交じりの文字起こしと違い、
+「一日」を「いちにち」と読んだか「ついたち」と読んだかが、そのまま出る。
+
+- 入力: 16bit PCM の WAV (mono / stereo、sampling rate は問わない)
+- model: 日本語の音素認識 (HuBERT base + CTC) の ONNX 4bit 版、63MB。初回に取得して
+  ${MOCA_HEAR_DIR:-${XDG_DATA_HOME:-~/.local/share}/moca-hear} へ置く (再起動しても残る)
+- CPU だけで動く (GPU は使わない。1 文 0.1〜0.2 秒)
+"""
+
+import hashlib
+import io
+import json
+import os
+import sys
+import urllib.request
+import wave
+from pathlib import Path
+
+REPO = "air-air/japanese-hubert-base-phoneme-ctc-v4-ONNX"
+REVISION = "a36617c5fbf7cfde02caa067716961c03cf4d87e"
+# 取得する file と sha256。違う中身は使わない。
+FILES = {
+    "onnx/model_q4.onnx": "0151f5bd899a86aab0d34c06dba74689e60a95e6dce0a6642b6c005b74aef630",
+    "vocab.json": "9c5c09049b351bf19479c84c646c69dd3f6fa12c2030b4318215ba4458211b05",
+}
+SAMPLE_RATE = 16000
+# 前後に無音が無いと、文の頭と尻を聞き落とす (model の説明は 150ms 以上。実測は 300ms で安定)。
+PAD_SECONDS = 0.3
+BLANK = 0  # CTC の空白 (vocab の PAD)
+# 聞こえた音ではない token。
+SILENT = {"PAD", "UNK", "SOS", "EOS", "pau", "sil"}
+
+
+def model_dir() -> Path:
+    base = os.environ.get("MOCA_HEAR_DIR")
+    if base:
+        return Path(base)
+    data = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+    return Path(data) / "moca-hear"
+
+
+def fetch(name: str, sha256: str) -> Path:
+    """model の file を、無ければ取得して返す。sha256 が合わない取得物は置かない。"""
+    path = model_dir() / REVISION / name
+    if path.exists():
+        return path
+    url = f"https://huggingface.co/{REPO}/resolve/{REVISION}/{name}"
+    print(f"moca-hear: fetching {url}", file=sys.stderr)
+    with urllib.request.urlopen(url, timeout=600) as res:
+        body = res.read()
+    actual = hashlib.sha256(body).hexdigest()
+    if actual != sha256:
+        raise SystemExit(f"moca-hear: sha256 mismatch for {name}: {actual}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".part")
+    partial.write_bytes(body)
+    partial.replace(path)
+    return path
+
+
+def read_wav(data: bytes):
+    """WAV を 16kHz mono の float32 にし、前後に無音を足す。"""
+    import numpy as np
+    import soxr
+
+    try:
+        with wave.open(io.BytesIO(data)) as wav:
+            if wav.getsampwidth() != 2:
+                raise SystemExit("moca-hear: only 16-bit PCM WAV is supported")
+            rate, channels = wav.getframerate(), wav.getnchannels()
+            pcm = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2")
+    except (wave.Error, EOFError) as error:
+        raise SystemExit(f"moca-hear: stdin is not a WAV: {error!r}") from None
+    audio = pcm.astype(np.float32) / 32768.0
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1)
+    if rate != SAMPLE_RATE:
+        audio = soxr.resample(audio, rate, SAMPLE_RATE)
+    pad = np.zeros(int(SAMPLE_RATE * PAD_SECONDS), dtype=np.float32)
+    return np.concatenate([pad, audio.astype(np.float32), pad])
+
+
+def collapse(ids, vocab: dict) -> list:
+    """CTC の出力 (frame ごとの token) から、続いた同じ token と空白を畳んで音素の列にする。"""
+    names = {index: name for name, index in vocab.items()}
+    phonemes = []
+    previous = None
+    for index in ids:
+        if index != previous and index != BLANK:
+            name = names.get(int(index), "UNK")
+            if name not in SILENT:
+                phonemes.append(name)
+        previous = index
+    return phonemes
+
+
+def main() -> None:
+    paths = {name: fetch(name, sha256) for name, sha256 in FILES.items()}
+    if sys.argv[1:] == ["--install"]:
+        print(f"moca-hear: model is ready in {model_dir() / REVISION}", file=sys.stderr)
+        return
+    if sys.argv[1:]:
+        raise SystemExit(__doc__)
+
+    import onnxruntime as ort
+
+    options = ort.SessionOptions()
+    # 短い音声 1 本なので、thread を増やしても速くならない。他の仕事の CPU を取らない。
+    options.intra_op_num_threads = 4
+    session = ort.InferenceSession(
+        str(paths["onnx/model_q4.onnx"]),
+        sess_options=options,
+        providers=["CPUExecutionProvider"],
+    )
+    vocab = json.loads(paths["vocab.json"].read_text())
+    audio = read_wav(sys.stdin.buffer.read())
+    logits = session.run(None, {session.get_inputs()[0].name: audio[None, :]})[0][0]
+    print(" ".join(collapse(logits.argmax(axis=-1), vocab)))
+
+
+if __name__ == "__main__":
+    main()

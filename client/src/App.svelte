@@ -7,6 +7,7 @@
 	import TextEditModal from '$lib/components/TextEditModal.svelte';
 	import NewLineModal from '$lib/components/NewLineModal.svelte';
 	import HelpModal from '$lib/components/HelpModal.svelte';
+	import ReadingModal from '$lib/components/ReadingModal.svelte';
 	import DictionaryView from '$lib/components/DictionaryView.svelte';
 	import WorkView from '$lib/components/WorkView.svelte';
 	import NotifySubscribe from '$lib/components/NotifySubscribe.svelte';
@@ -26,6 +27,7 @@
 	// Pour-in modal state. `afterLineId` inserts after that line; null = append end.
 	let pourIn = $state(false);
 	let pourInAfter = $state(null);
+	let readingOpen = $state(false);
 	let confirm = $state(null); // { kind, target, busy }
 	// Line context menu / text edit targets (null = closed).
 	let menuLine = $state(null);
@@ -440,7 +442,16 @@
 	}
 
 	function anyModalOpen() {
-		return !!(pourIn || confirm || menuLine || textEditLine || newLine || projectEdit || helpOpen);
+		return !!(
+			pourIn ||
+			confirm ||
+			menuLine ||
+			textEditLine ||
+			newLine ||
+			projectEdit ||
+			helpOpen ||
+			readingOpen
+		);
 	}
 
 	function onWindowKeydown(e) {
@@ -633,6 +644,7 @@
 						onToggleExpand={toggleExpandLine}
 						onpourin={openPourIn}
 						onhelp={() => (helpOpen = true)}
+						oncheck={() => (readingOpen = true)}
 					/>
 				{:else}
 					<div class="placeholder">プロジェクトを選択してください。</div>
@@ -697,6 +709,17 @@
 		label="プロジェクト名"
 		onclose={() => (projectEdit = null)}
 		oncommit={commitProjectEdit}
+	/>
+{/if}
+
+{#if readingOpen && selected}
+	<ReadingModal
+		projectId={selected.id}
+		{onplay}
+		onclose={() => {
+			readingOpen = false;
+			loadSelected();
+		}}
 	/>
 {/if}
 

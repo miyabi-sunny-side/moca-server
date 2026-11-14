@@ -24,11 +24,22 @@ impl From<AnalyzeError> for AppError {
     }
 }
 
+/// LLM に求める出力の形 (JSON Schema)。`OPENAI_JSON_SCHEMA=1` の `OpenAI` 互換 backend だけが要求に付ける。
+pub struct ResponseFormat {
+    pub name: &'static str,
+    pub schema: Value,
+}
+
 /// 呼び出し側から見た共通インタフェース。carry は感情の引きずり量 (0-0.9, 既定 1/3)。
 #[async_trait]
 pub trait Analyzer: Send + Sync {
     /// LLM を 1 回叩いて生テキストを回収する。非ゼロ終了/通信失敗は Err (リトライ対象)。
-    async fn fetch_output(&self, prompt: &str) -> Result<String, String>;
+    /// format は出力の形の希望で、渡せる backend だけが要求に付ける。
+    async fn fetch_output(
+        &self,
+        prompt: &str,
+        format: Option<&ResponseFormat>,
+    ) -> Result<String, String>;
 }
 
 /// 既定 carry。TS の `carry = 1 / 3` に対応。
@@ -75,9 +86,10 @@ pub async fn run_script_prompt(
     source: Option<&str>,
     carry: f64,
 ) -> Result<Value, AnalyzeError> {
+    let format = script_format();
     let mut last_error = String::new();
     for attempt in 1..=2 {
-        let out = match analyzer.fetch_output(prompt).await {
+        let out = match analyzer.fetch_output(prompt, Some(&format)).await {
             Ok(o) => o,
             Err(e) => {
                 last_error = e;
@@ -115,7 +127,11 @@ impl CliAnalyzer {
 
 #[async_trait]
 impl Analyzer for CliAnalyzer {
-    async fn fetch_output(&self, prompt: &str) -> Result<String, String> {
+    async fn fetch_output(
+        &self,
+        prompt: &str,
+        _format: Option<&ResponseFormat>,
+    ) -> Result<String, String> {
         // kill_on_drop: 呼び出し側の timeout やクライアント切断で future が落ちたとき、
         // CLI プロセス (LLM) を残存させない。
         let mut child = tokio::process::Command::new("sh")
@@ -163,6 +179,8 @@ pub struct OpenaiAnalyzer {
     api_key: String,
     model: String,
     extra_body: Map<String, Value>,
+    /// 出力の形 (JSON Schema) を `response_format` として要求に付けるか (`OPENAI_JSON_SCHEMA`)。
+    json_schema: bool,
     client: reqwest::Client,
 }
 
@@ -174,6 +192,7 @@ impl OpenaiAnalyzer {
         api_key: String,
         model: String,
         extra_body: Map<String, Value>,
+        json_schema: bool,
         timeout: Option<Duration>,
     ) -> Self {
         let base = api_base.trim_end_matches('/');
@@ -186,6 +205,7 @@ impl OpenaiAnalyzer {
             api_key,
             model,
             extra_body,
+            json_schema,
             client: client.build().expect("build the HTTP client"),
         }
     }
@@ -193,12 +213,17 @@ impl OpenaiAnalyzer {
 
 #[async_trait]
 impl Analyzer for OpenaiAnalyzer {
-    async fn fetch_output(&self, prompt: &str) -> Result<String, String> {
+    async fn fetch_output(
+        &self,
+        prompt: &str,
+        format: Option<&ResponseFormat>,
+    ) -> Result<String, String> {
+        let format = format.filter(|_| self.json_schema);
         let res = self
             .client
             .post(&self.url)
             .bearer_auth(&self.api_key)
-            .json(&chat_body(&self.model, prompt, &self.extra_body))
+            .json(&chat_body(&self.model, prompt, &self.extra_body, format))
             .send()
             .await
             .map_err(|e| format!("openai request failed: {}", error_chain(&e)))?;
@@ -220,6 +245,8 @@ impl Analyzer for OpenaiAnalyzer {
             .to_string())
     }
 }
+
+const DISABLED: &str = "analyze backend is disabled (set ANALYZE_BACKEND=cli or openai in .env)";
 
 /// backend の種別。none は analyze の前段で即 `AnalyzeError` にするため別扱いする
 /// (`fetch_output` の Err はリトライ対象なので、無効化はループ外で確定させる)。
@@ -243,6 +270,16 @@ impl Backend {
         self.run(prompt, None, carry).await
     }
 
+    /// 任意プロンプトで LLM を 1 回叩き、出力をそのまま返す (読みの確認が使う)。
+    /// 再試行と出力の検査は呼び出し側が持つ。
+    pub async fn ask(&self, prompt: &str, format: &ResponseFormat) -> Result<String, String> {
+        match self {
+            Backend::Cli(a) => a.fetch_output(prompt, Some(format)).await,
+            Backend::Openai(a) => a.fetch_output(prompt, Some(format)).await,
+            Backend::None => Err(DISABLED.into()),
+        }
+    }
+
     async fn run(
         &self,
         prompt: &str,
@@ -252,9 +289,7 @@ impl Backend {
         match self {
             Backend::Cli(a) => run_script_prompt(a, prompt, source, carry).await,
             Backend::Openai(a) => run_script_prompt(a, prompt, source, carry).await,
-            Backend::None => Err(AnalyzeError(
-                "analyze backend is disabled (set ANALYZE_BACKEND=cli or openai in .env)".into(),
-            )),
+            Backend::None => Err(AnalyzeError(DISABLED.into())),
         }
     }
 }
@@ -272,9 +307,23 @@ fn error_chain(error: &dyn std::error::Error) -> String {
 }
 
 /// chat/completions へ送る本文。追加項目 (`OPENAI_EXTRA_BODY`) を足すが、
-/// model と messages は常に moca-server の値にする。
-fn chat_body(model: &str, prompt: &str, extra: &Map<String, Value>) -> Value {
+/// model と messages は常に moca-server の値にする。format があれば `response_format` に付ける。
+fn chat_body(
+    model: &str,
+    prompt: &str,
+    extra: &Map<String, Value>,
+    format: Option<&ResponseFormat>,
+) -> Value {
     let mut body = extra.clone();
+    if let Some(format) = format {
+        body.insert(
+            "response_format".into(),
+            json!({
+                "type": "json_schema",
+                "json_schema": { "name": format.name, "strict": true, "schema": format.schema },
+            }),
+        );
+    }
     body.insert("model".into(), Value::from(model));
     body.insert(
         "messages".into(),
@@ -283,7 +332,7 @@ fn chat_body(model: &str, prompt: &str, extra: &Map<String, Value>) -> Value {
     Value::Object(body)
 }
 
-/// `OPENAI_JSON_SCHEMA` を読む。`1` で台本の JSON Schema を要求に付ける。未設定・空・`0` は付けない。
+/// `OPENAI_JSON_SCHEMA` を読む。`1` で出力の JSON Schema を要求に付ける。未設定・空・`0` は付けない。
 fn parse_json_schema_flag(raw: Option<&str>) -> Result<bool, String> {
     match raw.map(str::trim) {
         None | Some("" | "0") => Ok(false),
@@ -292,16 +341,12 @@ fn parse_json_schema_flag(raw: Option<&str>) -> Result<bool, String> {
     }
 }
 
-/// 追加項目に、台本の JSON Schema を `response_format` として足す。
-fn with_script_schema(mut extra: Map<String, Value>) -> Map<String, Value> {
-    extra.insert(
-        "response_format".into(),
-        json!({
-            "type": "json_schema",
-            "json_schema": { "name": "script", "strict": true, "schema": script_json_schema() },
-        }),
-    );
-    extra
+/// 台本の出力の形。
+fn script_format() -> ResponseFormat {
+    ResponseFormat {
+        name: "script",
+        schema: script_json_schema(),
+    }
 }
 
 /// `OPENAI_EXTRA_BODY` を読む。未設定・空は追加なし。JSON object 以外は Err。
@@ -357,12 +402,12 @@ pub fn create_analyzer_from_env() -> Backend {
                     let extra = parse_extra_body(var("OPENAI_EXTRA_BODY").as_deref());
                     let schema = parse_json_schema_flag(var("OPENAI_JSON_SCHEMA").as_deref());
                     let timeout = parse_timeout(var("OPENAI_TIMEOUT_SECS").as_deref());
-                    let mut extra = extra.unwrap_or_else(|e| fail(e));
-                    if schema.unwrap_or_else(|e| fail(e)) {
-                        extra = with_script_schema(extra);
-                    }
+                    let extra = extra.unwrap_or_else(|e| fail(e));
+                    let schema = schema.unwrap_or_else(|e| fail(e));
                     let timeout = timeout.unwrap_or_else(|e| fail(e));
-                    Backend::Openai(OpenaiAnalyzer::new(&base, key, model, extra, timeout))
+                    Backend::Openai(OpenaiAnalyzer::new(
+                        &base, key, model, extra, schema, timeout,
+                    ))
                 }
                 _ => panic!(
                     "ANALYZE_BACKEND=openai requires OPENAI_API_BASE, OPENAI_API_KEY, OPENAI_MODEL"
@@ -424,7 +469,11 @@ mod tests {
 
     #[async_trait]
     impl Analyzer for Canned {
-        async fn fetch_output(&self, _prompt: &str) -> Result<String, String> {
+        async fn fetch_output(
+            &self,
+            _prompt: &str,
+            _format: Option<&ResponseFormat>,
+        ) -> Result<String, String> {
             self.0.lock().unwrap().pop().unwrap()
         }
     }
@@ -508,7 +557,7 @@ mod tests {
     #[test]
     fn chat_body_without_extra_is_model_and_messages() {
         assert_eq!(
-            chat_body("m", "やあ", &Map::new()),
+            chat_body("m", "やあ", &Map::new(), None),
             json!({ "model": "m", "messages": [{ "role": "user", "content": "やあ" }] })
         );
     }
@@ -520,7 +569,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            chat_body("m", "やあ", &extra),
+            chat_body("m", "やあ", &extra, None),
             json!({
                 "reasoning_effort": "none",
                 "model": "m",
@@ -532,7 +581,8 @@ mod tests {
     #[test]
     fn script_schema_is_sent_as_response_format() {
         let extra = parse_extra_body(Some(r#"{"reasoning_effort":"none"}"#)).unwrap();
-        let body = chat_body("m", "やあ", &with_script_schema(extra));
+        let body = chat_body("m", "やあ", &extra, Some(&script_format()));
+        assert_eq!(body["response_format"]["json_schema"]["name"], "script");
         assert_eq!(body["reasoning_effort"], "none");
         assert_eq!(body["response_format"]["type"], "json_schema");
         assert_eq!(
@@ -543,6 +593,26 @@ mod tests {
             body["response_format"]["json_schema"]["schema"]["type"],
             "array"
         );
+    }
+
+    #[test]
+    fn each_request_sends_its_own_schema() {
+        let format = crate::reading::words_format();
+        let body = chat_body("m", "やあ", &Map::new(), Some(&format));
+        assert_eq!(body["response_format"]["json_schema"]["name"], "reading");
+        assert_eq!(
+            body["response_format"]["json_schema"]["schema"],
+            format.schema
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_returns_the_raw_output_and_none_is_an_error() {
+        let format = crate::reading::words_format();
+        let backend = Backend::Cli(CliAnalyzer::new("cat".into()));
+        assert_eq!(backend.ask("そのまま", &format).await.unwrap(), "そのまま");
+        let err = Backend::None.ask("x", &format).await.unwrap_err();
+        assert!(err.contains("disabled"), "message: {err}");
     }
 
     #[test]

@@ -5,7 +5,7 @@ use crate::analyze::DEFAULT_CARRY;
 use crate::db::now_iso;
 use crate::error::AppError;
 use crate::script::serialize_script;
-use crate::serialize::{get_line, lines_by_project, serialize_line, LineRow};
+use crate::serialize::{get_line, lines_by_project, serialize_line, LineRow, LINE_COLS};
 use crate::state::AppState;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -89,8 +89,10 @@ async fn add(State(state): State<AppState>, Path(id): Path<String>, body: Bytes)
 
     let position = next_position(&conn, project_id)?;
     let row = conn.query_row(
-        "INSERT INTO lines (project_id, position, mode, text, script) \
-         VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id, project_id, position, mode, text, script",
+        &format!(
+            "INSERT INTO lines (project_id, position, mode, text, script) \
+             VALUES (?1, ?2, ?3, ?4, ?5) RETURNING {LINE_COLS}"
+        ),
         (project_id, position, mode, text, &script),
         LineRow::from_row,
     )?;
@@ -132,17 +134,22 @@ async fn update(State(state): State<AppState>, Path(id): Path<String>, body: Byt
         }
     }
 
+    // 文が変わったら、読みの確認の結果は古い文のものなので捨てる (確かめ直すまで今のまま読む)。
+    let new_reading = line.reading.filter(|_| new_text == line.text);
+
     let row = conn.query_row(
-        "UPDATE lines SET text = ?1, mode = ?2, script = ?3 WHERE id = ?4 \
-         RETURNING id, project_id, position, mode, text, script",
-        (&new_text, &new_mode, &new_script, id),
+        &format!(
+            "UPDATE lines SET text = ?1, mode = ?2, script = ?3, reading = ?4 WHERE id = ?5 \
+             RETURNING {LINE_COLS}"
+        ),
+        (&new_text, &new_mode, &new_script, &new_reading, id),
         LineRow::from_row,
     )?;
     touch_project(&conn, line.project_id)?;
     Ok((StatusCode::OK, Json(serialize_line(&row))))
 }
 
-// 行複製。mode/text/script ごとコピーして対象行の直下 (position+1) に挿入する。
+// 行複製。mode/text/script と読みの確認の結果ごとコピーして対象行の直下 (position+1) に挿入する。
 async fn duplicate(State(state): State<AppState>, Path(id): Path<String>) -> JsonResult {
     let id = parse_id(&id)?;
     let mut conn = state.db.lock()?;
@@ -157,14 +164,17 @@ async fn duplicate(State(state): State<AppState>, Path(id): Path<String>) -> Jso
             (line.project_id, line.position),
         )?;
         let row = tx.query_row(
-            "INSERT INTO lines (project_id, position, mode, text, script) \
-             VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id, project_id, position, mode, text, script",
+            &format!(
+                "INSERT INTO lines (project_id, position, mode, text, script, reading) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING {LINE_COLS}"
+            ),
             (
                 line.project_id,
                 line.position + 1,
                 &line.mode,
                 &line.text,
                 &line.script,
+                &line.reading,
             ),
             LineRow::from_row,
         )?;
@@ -325,9 +335,10 @@ async fn import(
     let mut created: Vec<Value> = Vec::with_capacity(texts.len());
     for (i, text) in texts.iter().enumerate() {
         let row = conn.query_row(
-            "INSERT INTO lines (project_id, position, mode, text, script) \
-             VALUES (?1, ?2, 'announcer', ?3, NULL) \
-             RETURNING id, project_id, position, mode, text, script",
+            &format!(
+                "INSERT INTO lines (project_id, position, mode, text, script) \
+                 VALUES (?1, ?2, 'announcer', ?3, NULL) RETURNING {LINE_COLS}"
+            ),
             (project_id, start_pos + len_i64(i), text),
             LineRow::from_row,
         )?;
@@ -362,9 +373,10 @@ fn import_acting(state: AppState, project_id: i64, texts: Vec<String>, start_pos
 
             let row = state.db.lock().map_err(AppError::from).and_then(|conn| {
                 Ok(conn.query_row(
-                    "INSERT INTO lines (project_id, position, mode, text, script) \
-                     VALUES (?1, ?2, ?3, ?4, ?5) \
-                     RETURNING id, project_id, position, mode, text, script",
+                    &format!(
+                        "INSERT INTO lines (project_id, position, mode, text, script) \
+                         VALUES (?1, ?2, ?3, ?4, ?5) RETURNING {LINE_COLS}"
+                    ),
                     (project_id, start_pos + len_i64(i), mode, text, &script),
                     LineRow::from_row,
                 )?)

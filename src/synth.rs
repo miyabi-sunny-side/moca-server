@@ -136,6 +136,17 @@ async fn synthesize_segment(
     Err(format!("voicepeak gave up on {text:?}: {last_err}"))
 }
 
+/// 1 セグメントを合成して PCM を返す (読みの確認が、合成した音声を聞き取るのに使う)。
+/// 他の合成と同じ列に並び、1 セグメントごとにロックを手放す。
+pub async fn synthesize_pcm(
+    synth: &SynthQueue,
+    cfg: &SynthConfig,
+    seg: &Value,
+) -> Result<Vec<u8>, String> {
+    let mut guard = synth.enter().await;
+    synthesize_segment(&mut guard.engine, cfg, seg).await
+}
+
 /// 1 件の生成を依頼し、tempfile 経由で出力 WAV を読んで PCM を取り出す。
 async fn run_voicepeak(
     engine: &mut Voicepeak,

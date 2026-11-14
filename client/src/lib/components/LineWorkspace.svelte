@@ -20,7 +20,8 @@
 		onmenu,
 		onToggleExpand,
 		onpourin,
-		onhelp
+		onhelp,
+		oncheck
 	} = $props();
 
 	let editingName = $state(false);
@@ -93,6 +94,11 @@
 			</button>
 		{/if}
 		<span class="count">{project.lines.length} 行</span>
+		{#if project.lines.length > 0}
+			<button type="button" class="help check" aria-label="読みを確認" title="読みを確認" onclick={oncheck}>
+				<Icon name="ear" />
+			</button>
+		{/if}
 	</div>
 
 	<div class="lines">
@@ -179,6 +185,12 @@
 	.count
 		font-size: var(--fs-xs)
 		color: var(--c-text-muted)
+
+// 読みを確認: quiet icon-button at the far right of the head. The head's height
+// is shared with the project pane, so the button must not grow it.
+.check
+	margin-left: auto
+	margin-block: calc(var(--sp-2) * -1)
 
 .lines
 	flex: 1

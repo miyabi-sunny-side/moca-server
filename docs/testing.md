@@ -16,6 +16,11 @@ commit 前に手元で以下を通す。GitHub Actions は release の build と
   c++ -std=c++17 -DMOCA_RESIDENT_TEST native/voicepeak_resident.cpp -o /tmp/moca-resident-test
   /tmp/moca-resident-test
   ```
+- 読みの確認: 判断 (読みの比較・違う語の特定・直し方の選択・繰り返しの打ち切り) は `src/reading.rs` の
+  単体テストが、生成 AI と合成・聞き取りを台本どおりに答える偽物に替えて確かめる。
+  API の外側からの動きは `src/routes/reading/tests.rs` が、shell で書いた偽の VOICEPEAK・生成 AI・
+  聞き取りコマンドで確かめる (偽 VOICEPEAK は渡された文を WAV の中身にし、偽の聞き取りがその文から音素を決める)。
+  実物の VOICEPEAK・生成 AI・`bin/moca-hear` の音素認識は、この検証に含まない。
 - 通知 listener: `bash tests/moca-listen.sh` で音量・プレイヤー選択・WAV 補正を検証する。
   `cargo test --locked` は、実 curl と一時 localhost SSE サーバーを使う出力検証も実行する。
   通知なしの接続、再接続、日時と出力先、keepalive、再生順序・成功・失敗、シグナル終了を確認する。
@@ -50,6 +55,8 @@ commit 前に手元で以下を通す。GitHub Actions は release の build と
 12. `?`: ショートカット一覧モーダルを ? キー / フッターボタンから開閉、表示中は他ショートカット無効 (`12-help-modal`)
 13. プロジェクト列の `a`/`i`: 未選択プロジェクトも含めタイトル編集、キャレット位置・PATCH 内容・一覧反映 (`13-project-rename`)
 14. 作業タブ: タブ切替とショートカット無効、`page.clock` によるフェーズ遷移 (作業→休憩→「どうする?」で停止→ユーザーがもう1セット)、終了時のおつかれさま、節目・チャッター (独り言) の声かけ (`/say` への script JSON POST)、一時停止/再開の期限再計算、スリープ復帰の resync 潰し、LLM 声かけ (`/work/talk`) の成功経路と 502 フォールバック、おしゃべり「なし」(`14-work-tab`)
+15. 辞書タブの vim 操作 (`15-dictionary-vim`)
+16. 読みの確認: ヘッダーの耳のボタンで確認を流し、行ごとの元の文・生成 AI の読み・聞き取った読み・直した表記を表示、直しを外す、確かめ直す (`force`)、始められない時の理由、再生が行の id を `/say` へ渡す事、直した行の印 (`16-reading-check`)
 
 ## E2E では担保できないため、リリース前に手動確認する項目
 

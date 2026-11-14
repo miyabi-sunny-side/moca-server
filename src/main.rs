@@ -5,7 +5,9 @@ mod db;
 mod dictionary;
 mod error;
 mod fallback;
+mod listen;
 mod opus;
+mod reading;
 mod routes;
 mod script;
 mod serialize;
@@ -61,6 +63,7 @@ async fn main() {
         analyzer: Arc::new(analyzer),
         news_analyzer,
         fallback,
+        listener: listen::Listener::from_env().map(Arc::new),
         notify,
     };
 

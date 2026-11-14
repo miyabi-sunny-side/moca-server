@@ -38,6 +38,15 @@
 
 	let rowDraggable = $state(false);
 
+	// The text the voice actually reads when the reading check respelled a
+	// misread word (the shown text never changes).
+	const respelled = $derived(
+		(line.reading?.segments ?? [])
+			.map((s) => s.spoken)
+			.filter(Boolean)
+			.join(' ')
+	);
+
 	function saveScript(script) {
 		onsave?.(line, { script });
 	}
@@ -171,6 +180,10 @@
 				<EmotionChips script={line.script} />
 			{/if}
 		</div>
+
+		{#if respelled}
+			<span class="reading-mark" title={`読み上げ: ${respelled}`}>読み</span>
+		{/if}
 
 		<button
 			type="button"
@@ -307,6 +320,18 @@
 		-webkit-line-clamp: 2
 		-webkit-box-orient: vertical
 		overflow: hidden
+
+// Reading-check mark: this row is spoken with a respelled text. Caption type,
+// neutral chrome (a state of the row, not an action).
+.reading-mark
+	flex: none
+	padding: 1px var(--sp-1)
+	border: 1px dashed var(--c-border)
+	border-radius: var(--radius-sm)
+	color: var(--c-text-muted)
+	font-size: var(--fs-xs)
+	white-space: nowrap
+	cursor: default
 
 // Mode toggle: a real button that stays as quiet as an outline badge —
 // affordance is cursor + hover wash only, no weight or fill change.

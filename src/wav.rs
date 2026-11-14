@@ -18,12 +18,16 @@ pub const MOCA_FORMAT: WavFormat = WavFormat {
 /// 合成完了まで全体長が分からないため、RIFF/data のサイズには
 /// 0xFFFFFFFF (不定長) を入れる。ffplay やブラウザはこれで逐次再生できる。
 pub fn wav_header(format: &WavFormat) -> Vec<u8> {
+    header(format, 0xFFFF_FFFF, 0xFFFF_FFFF)
+}
+
+fn header(format: &WavFormat, riff_size: u32, data_size: u32) -> Vec<u8> {
     let block_align = format.channels * (format.bits_per_sample / 8);
     let byte_rate = format.sample_rate * u32::from(block_align);
 
     let mut b = Vec::with_capacity(44);
     b.extend_from_slice(b"RIFF");
-    b.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // 全体サイズ: 不定
+    b.extend_from_slice(&riff_size.to_le_bytes());
     b.extend_from_slice(b"WAVE");
     b.extend_from_slice(b"fmt ");
     b.extend_from_slice(&16u32.to_le_bytes()); // fmt チャンクサイズ
@@ -34,8 +38,17 @@ pub fn wav_header(format: &WavFormat) -> Vec<u8> {
     b.extend_from_slice(&block_align.to_le_bytes());
     b.extend_from_slice(&format.bits_per_sample.to_le_bytes());
     b.extend_from_slice(b"data");
-    b.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // データサイズ: 不定
+    b.extend_from_slice(&data_size.to_le_bytes());
     b
+}
+
+/// PCM 全体が手元にある時の、長さの入った WAV を作る (聞き取りの道具へ渡す)。
+pub fn wav_bytes(format: &WavFormat, pcm: &[u8]) -> Vec<u8> {
+    // 1 文の PCM は数 MB で、4GiB (WAV の上限) には届かない。
+    let data_size = u32::try_from(pcm.len()).unwrap_or(u32::MAX - 36);
+    let mut wav = header(format, 36 + data_size, data_size);
+    wav.extend_from_slice(pcm);
+    wav
 }
 
 /// RIFF/WAVE を fmt/data チャンクとしてパースし data 部 (PCM) を取り出す。
@@ -80,6 +93,22 @@ mod tests {
         // ストリーミング用の不定サイズ。
         assert_eq!(&h[4..8], &0xFFFF_FFFFu32.to_le_bytes());
         assert_eq!(&h[40..44], &0xFFFF_FFFFu32.to_le_bytes());
+    }
+
+    #[test]
+    fn wav_bytes_carries_real_sizes_and_the_pcm() {
+        let pcm: Vec<u8> = (0..100u8).collect();
+        let wav = wav_bytes(&MOCA_FORMAT, &pcm);
+        assert_eq!(wav.len(), 44 + 100);
+        assert_eq!(
+            u32::from_le_bytes([wav[4], wav[5], wav[6], wav[7]]),
+            36 + 100
+        );
+        assert_eq!(
+            u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]),
+            100
+        );
+        assert_eq!(extract_pcm(&wav).unwrap(), pcm);
     }
 
     fn chunk(id: [u8; 4], data: &[u8]) -> Vec<u8> {

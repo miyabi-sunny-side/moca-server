@@ -50,7 +50,12 @@ export async function importActing(projectId, text, { onEvent, onComplete, signa
 		signal
 	});
 	if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`);
+	await readEvents(res, { onEvent, onComplete });
+}
 
+// Read a server-sent event stream to its end: `onEvent(data)` per unnamed
+// event, `onComplete(data)` for the final `complete` event.
+async function readEvents(res, { onEvent, onComplete }) {
 	const reader = res.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';
@@ -76,6 +81,27 @@ export async function importActing(projectId, text, { onEvent, onComplete, signa
 	}
 }
 
+// --- Reading check (読みの確認) ---
+// Checks every line of a project (AI reading vs. what the synthesized audio
+// actually says) and stores a respelled text for misread lines. Streams
+// `onEvent({ index, total, status, error, line })` per line; status is
+// 'checked' | 'skipped' (already checked) | 'failed' (nothing changed).
+// `force` re-checks lines that were already checked.
+export async function checkReadings(projectId, { force = false, onEvent, onComplete, signal } = {}) {
+	const res = await fetch(`/api/projects/${projectId}/reading/check`, {
+		...json('POST', { force }),
+		signal
+	});
+	if (!res.ok || !res.body) {
+		const body = await res.json().catch(() => null);
+		throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+	}
+	await readEvents(res, { onEvent, onComplete });
+}
+// Stop using a line's fix (the check's record stays, so it is not fixed again).
+export const dismissReading = (lineId) =>
+	fetcher(`/api/lines/${lineId}/reading/dismiss`, json('POST'));
+
 // --- Re-analysis: run /analyze for one line's text and return the script JSON ---
 export async function analyzeLine(text) {
 	const res = await fetch('/analyze', { method: 'POST', body: text });
@@ -93,6 +119,11 @@ export async function workTalk(kind, context, signal) {
 // --- Playback source URLs (audio is synthesized on demand by /say) ---
 // `raw` skips the reading dictionary (used by the 辞書 preview, which speaks a
 // reading string verbatim so it isn't substituted again).
-export const sayTextUrl = (text, raw = false) =>
-	`/say?text=${encodeURIComponent(text)}${raw ? '&raw=1' : ''}`;
+// `lineId` names the stored line being played, so the server speaks the text
+// respelled by its reading check (ignored for raw previews and unsaved text).
+const lineQuery = (lineId) => (Number.isInteger(lineId) ? `line=${lineId}` : '');
+export const sayTextUrl = (text, raw = false, lineId = null) =>
+	`/say?text=${encodeURIComponent(text)}` +
+	(raw ? '&raw=1' : lineQuery(lineId) && `&${lineQuery(lineId)}`);
+export const sayScriptUrl = (lineId = null) => `/say${lineQuery(lineId) && `?${lineQuery(lineId)}`}`;
 export const sayScriptRequest = (script) => json('POST', script);

@@ -140,7 +140,7 @@ pub fn ensure_text_kept(script: &Value, source: &str) -> Result<(), ScriptError>
     }
 }
 
-fn spoken_chars(text: &str) -> String {
+pub fn spoken_chars(text: &str) -> String {
     text.chars().filter(|c| c.is_alphanumeric()).collect()
 }
 

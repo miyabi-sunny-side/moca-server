@@ -157,12 +157,18 @@ express them.
   text. Entries apply longest-surface-first; ASCII surfaces match
   case-insensitively. It applies to アナウンサー text and to every 演技
   segment text; /analyze always reads the original.
-- **Fixing a misreading is a permanent two-way choice, made by ear:**
-  words that are wrong everywhere (foreign words, proper nouns) go in
-  the dictionary; readings that depend on context are fixed by editing
-  that one line's text. The listen-through exists to surface these; the
-  UI keeps both fixes one step away and never pretends to automate the
-  choice.
+- **A misreading has two fixes:** words that are wrong everywhere
+  (foreign words, proper nouns) go in the dictionary; readings that
+  depend on context (一日 = いちにち / ついたち) are fixed per line by a
+  **reading-only respelling** that never touches the shown text or the
+  script JSON. The reading check finds context-dependent misreadings by
+  comparing an AI's reading with what the synthesized audio actually
+  says, and applies the respelling itself (user decision, task
+  bde3a31e, 2026-11-15 — this replaces the earlier "never pretends to
+  automate the choice" stance). Because the AI can be wrong, every
+  automatic fix stays visible and reversible: the row carries a quiet
+  mark, and the check lists what was heard, what the AI read, and the
+  respelled text, with a one-tap way to drop the fix.
 - **Accent / intonation control is explicitly out of scope.** VOICEPEAK
   decides accent from the (rewritten) text; occasional odd intonation is
   accepted as character, not fought with tooling.

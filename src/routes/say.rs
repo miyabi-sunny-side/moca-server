@@ -5,7 +5,9 @@ use crate::dictionary::{
     apply_dictionary, apply_dictionary_to_segments, load_dictionary, DictEntry,
 };
 use crate::error::AppError;
+use crate::reading::{apply_reading, LineReading};
 use crate::script::validate_script;
+use crate::serialize::get_line;
 use crate::state::AppState;
 use crate::synth::{split_sentences, stream_synthesis, OutputFormat, SynthConfig};
 use axum::body::{Body, Bytes};
@@ -44,6 +46,17 @@ async fn say(
         build_plain_segments(&state, &method, &query, &body)?
     };
 
+    // ?line=<行の id>: その行の読みの確認で直した表記を使う (画面の再生が付ける)。
+    // ?raw=1 は読み文字列をそのまま読むので、直しも掛けない。
+    let raw = query.get("raw").is_some_and(|v| !v.is_empty());
+    let segments = match query.get("line") {
+        Some(id) if !raw => {
+            let reading = line_reading(&state, super::parse_id(id)?)?;
+            apply_reading(segments, reading.as_ref())
+        }
+        _ => segments,
+    };
+
     // 既定は Ogg/Opus (帯域 1/12)。Accept: audio/wav は WAV 経路 (動画素材用の可逆出力)。
     let wants_wav = headers
         .get(ACCEPT)
@@ -62,6 +75,13 @@ async fn say(
 fn load_entries(state: &AppState) -> Result<Vec<DictEntry>, AppError> {
     let conn = state.db.lock()?;
     Ok(load_dictionary(&conn)?)
+}
+
+// 行に保存してある読みの確認の結果。行が無い・確かめていない時は None。
+fn line_reading(state: &AppState, line_id: i64) -> Result<Option<LineReading>, AppError> {
+    let conn = state.db.lock()?;
+    let row = get_line(&conn, line_id)?;
+    Ok(row.and_then(|row| LineReading::parse(row.reading.as_deref())))
 }
 
 // application/json 経路: validate_script を通し、各 segment.text に辞書を適用する。
@@ -256,6 +276,7 @@ mod tests {
             analyzer: Arc::new(crate::analyze::Backend::None),
             news_analyzer: None,
             fallback: Arc::new(crate::fallback::FallbackDict::empty()),
+            listener: None,
             notify,
         }
     }
